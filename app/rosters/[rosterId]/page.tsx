@@ -5,7 +5,7 @@ import Papa from "papaparse";
 import { useMutation, useQuery } from "convex/react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { use, useState } from "react";
+import { use, useEffect, useState } from "react";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { PageShell } from "@/components/page-shell";
 import { api } from "@/convex/api";
@@ -62,11 +62,29 @@ export default function RosterDetailPage({
   const [isDeletingRoster, setIsDeletingRoster] = useState(false);
   const [isStopDialogOpen, setIsStopDialogOpen] = useState(false);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
+  const [canShareCsvFile, setCanShareCsvFile] = useState(false);
   const latestSessionId = data && data !== null ? (data.sessions[0]?._id ?? null) : null;
   const sessionExport = useQuery(
     api.attendance.getSessionExport,
     latestSessionId ? { sessionId: latestSessionId } : "skip",
   );
+
+  useEffect(() => {
+    if (
+      typeof navigator === "undefined" ||
+      typeof navigator.share !== "function" ||
+      typeof navigator.canShare !== "function"
+    ) {
+      setCanShareCsvFile(false);
+      return;
+    }
+
+    const probeFile = new File(["attendance"], "attendance.csv", {
+      type: "text/csv;charset=utf-8;",
+    });
+
+    setCanShareCsvFile(navigator.canShare({ files: [probeFile] }));
+  }, []);
 
   if (data === undefined) {
     return (
@@ -182,13 +200,15 @@ export default function RosterDetailPage({
     }
   }
 
-  function handleExportCsv() {
+  async function handleExportCsv() {
     if (!sessionExport) {
       return;
     }
 
+    setSessionError(null);
     setIsExporting(true);
     try {
+      const fileName = `${sanitizeFilePart(sessionExport.roster.name)}-${sessionExport.session.date}-attendance.csv`;
       const csv = Papa.unparse([
         ["Date", sessionExport.session.date],
         [],
@@ -200,15 +220,38 @@ export default function RosterDetailPage({
         ]),
       ]);
 
+      const file = new File([csv], fileName, {
+        type: "text/csv;charset=utf-8;",
+      });
+
+      if (
+        typeof navigator !== "undefined" &&
+        typeof navigator.share === "function" &&
+        typeof navigator.canShare === "function" &&
+        navigator.canShare({ files: [file] })
+      ) {
+        await navigator.share({
+          title: fileName,
+          files: [file],
+        });
+        return;
+      }
+
       const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
       const url = window.URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
-      link.download = `${sanitizeFilePart(sessionExport.roster.name)}-${sessionExport.session.date}-attendance.csv`;
+      link.download = fileName;
       document.body.appendChild(link);
       link.click();
       link.remove();
       window.URL.revokeObjectURL(url);
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        return;
+      }
+
+      setSessionError(error instanceof Error ? error.message : "Could not export attendance CSV.");
     } finally {
       setIsExporting(false);
     }
@@ -347,11 +390,17 @@ export default function RosterDetailPage({
             {latestSession ? (
               <button
                 type="button"
-                onClick={handleExportCsv}
+                onClick={() => void handleExportCsv()}
                 disabled={!sessionExport || isExporting}
                 className="inline-flex h-11 items-center justify-center rounded-full border border-slate-300 bg-white px-4 text-sm font-medium text-slate-700 transition hover:border-slate-400 hover:text-slate-950 disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-400"
               >
-                {isExporting ? "Exporting..." : "Export attendance CSV"}
+                {isExporting
+                  ? canShareCsvFile
+                    ? "Opening share sheet..."
+                    : "Exporting..."
+                  : canShareCsvFile
+                    ? "Share attendance CSV"
+                    : "Export attendance CSV"}
               </button>
             ) : null}
           </div>
