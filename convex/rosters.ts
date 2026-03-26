@@ -51,6 +51,7 @@ export const list = query({
       createdAt: v.number(),
       studentCount: v.number(),
       sessionCount: v.number(),
+      hasActiveSession: v.boolean(),
       latestSessionId: v.optional(v.id("sessions")),
     }),
   ),
@@ -80,6 +81,7 @@ export const list = query({
           createdAt: roster.createdAt,
           studentCount: students.length,
           sessionCount: sessions.length,
+          hasActiveSession: sessions.some((session) => session.isOpen),
           latestSessionId: latestSession?._id,
         };
       }),

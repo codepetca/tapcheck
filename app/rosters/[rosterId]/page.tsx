@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, Play, Square, User } from "lucide-react";
+import { Check, CircleHelp, Copy, ExternalLink, Pencil, Play, Share, Square, User } from "lucide-react";
 import Papa from "papaparse";
 import { useMutation, useQuery } from "convex/react";
 import Link from "next/link";
@@ -8,9 +8,14 @@ import { useRouter } from "next/navigation";
 import { use, useEffect, useState } from "react";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { PageShell } from "@/components/page-shell";
+import { Card } from "@/components/ui/card";
+import { Dialog } from "@/components/ui/dialog";
 import { api } from "@/convex/api";
 import type { Id } from "@/convex/model";
 import { buildAbsoluteUrl, buildEditorPath } from "@/lib/session-links";
+
+type SortColumn = "firstName" | "lastName" | "studentId" | "status";
+type SortDirection = "asc" | "desc";
 
 function today() {
   const now = new Date();
@@ -18,14 +23,6 @@ function today() {
   const month = String(now.getMonth() + 1).padStart(2, "0");
   const day = String(now.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
-}
-
-function formatDate(date: string) {
-  return new Intl.DateTimeFormat(undefined, {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  }).format(new Date(`${date}T00:00:00`));
 }
 
 function sanitizeFilePart(value: string) {
@@ -62,7 +59,10 @@ export default function RosterDetailPage({
   const [isDeletingRoster, setIsDeletingRoster] = useState(false);
   const [isStopDialogOpen, setIsStopDialogOpen] = useState(false);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
+  const [isHelpDialogOpen, setIsHelpDialogOpen] = useState(false);
   const [canShareCsvFile, setCanShareCsvFile] = useState(false);
+  const [sortColumn, setSortColumn] = useState<SortColumn>("lastName");
+  const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
   const latestSessionId = data && data !== null ? (data.sessions[0]?._id ?? null) : null;
   const sessionExport = useQuery(
     api.attendance.getSessionExport,
@@ -113,6 +113,105 @@ export default function RosterDetailPage({
     activeSession && typeof window !== "undefined"
       ? buildAbsoluteUrl(window.location.origin, editorPath)
       : editorPath;
+  const startControlLabel = isStartingSession
+    ? "Starting"
+    : hasStudents
+      ? "Start"
+      : "Add students to start";
+  const stopControlLabel = isStoppingSession ? "Stopping" : "Stop";
+  const exportControlLabel = isExporting
+    ? canShareCsvFile
+      ? "Opening share sheet"
+      : "Exporting attendance CSV"
+    : canShareCsvFile
+      ? "Share attendance CSV"
+      : "Export attendance CSV";
+  const attendanceByStudentId = new Map(
+    sessionExport?.rows.map((row) => [row.studentId, row.present]) ?? [],
+  );
+  const students = data.students
+    .map((student, index) => {
+      const present = attendanceByStudentId.get(student.studentId);
+
+      return {
+        ...student,
+        originalIndex: index,
+        statusLabel:
+          latestSession && present !== undefined
+            ? present
+              ? "Present"
+              : "Absent"
+            : latestSession
+              ? "Loading"
+              : "No session",
+        statusTone:
+          latestSession && present !== undefined
+            ? present
+              ? "present"
+              : "absent"
+            : latestSession
+              ? "loading"
+              : "none",
+      };
+    })
+    .sort((left, right) => {
+      const direction = sortDirection === "asc" ? 1 : -1;
+
+      switch (sortColumn) {
+        case "firstName":
+          return (
+            left.firstName.localeCompare(right.firstName, undefined, { sensitivity: "base" }) *
+              direction ||
+            left.lastName.localeCompare(right.lastName, undefined, { sensitivity: "base" }) *
+              direction ||
+            left.originalIndex - right.originalIndex
+          );
+        case "lastName":
+          return (
+            left.lastName.localeCompare(right.lastName, undefined, { sensitivity: "base" }) *
+              direction ||
+            left.firstName.localeCompare(right.firstName, undefined, { sensitivity: "base" }) *
+              direction ||
+            left.originalIndex - right.originalIndex
+          );
+        case "studentId":
+          return (
+            left.studentId.localeCompare(right.studentId, undefined, { sensitivity: "base" }) *
+              direction ||
+            left.originalIndex - right.originalIndex
+          );
+        case "status":
+          return (
+            left.statusLabel.localeCompare(right.statusLabel, undefined, { sensitivity: "base" }) *
+              direction ||
+            left.lastName.localeCompare(right.lastName, undefined, { sensitivity: "base" }) *
+              direction ||
+            left.firstName.localeCompare(right.firstName, undefined, { sensitivity: "base" }) *
+              direction ||
+            left.originalIndex - right.originalIndex
+          );
+      }
+    });
+  const presentCount = students.filter((student) => student.statusTone === "present").length;
+  const absentCount = students.filter((student) => student.statusTone === "absent").length;
+
+  function toggleSort(nextColumn: SortColumn) {
+    if (sortColumn === nextColumn) {
+      setSortDirection((current) => (current === "asc" ? "desc" : "asc"));
+      return;
+    }
+
+    setSortColumn(nextColumn);
+    setSortDirection("asc");
+  }
+
+  function sortIndicator(column: SortColumn) {
+    if (sortColumn !== column) {
+      return " ";
+    }
+
+    return sortDirection === "asc" ? " ↑" : " ↓";
+  }
 
   async function handleTitleSave() {
     const nextName = draftTitle.trim();
@@ -273,9 +372,18 @@ export default function RosterDetailPage({
   return (
     <PageShell
       title={
-        <div>
+        <div className="relative">
+          <button
+            type="button"
+            onClick={() => setIsHelpDialogOpen(true)}
+            aria-label="How attendance sharing works"
+            title="How attendance sharing works"
+            className="absolute right-0 top-0 inline-flex h-10 w-10 items-center justify-center rounded-full text-slate-500 transition hover:bg-slate-100 hover:text-slate-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+          >
+            <CircleHelp aria-hidden="true" className="h-4 w-4" />
+          </button>
           {isEditingTitle ? (
-            <div className="space-y-3">
+            <div className="space-y-3 pr-12">
               <input
                 autoFocus
                 value={draftTitle}
@@ -316,18 +424,20 @@ export default function RosterDetailPage({
               {titleError ? <p className="text-sm text-rose-700">{titleError}</p> : null}
             </div>
           ) : (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setDraftTitle(roster.name);
-                    setIsEditingTitle(true);
-                    setTitleError(null);
-                  }}
-                  className="font-heading text-left text-3xl font-semibold tracking-tight text-slate-950 transition hover:text-emerald-700"
-                >
-                  {roster.name}
-                </button>
-              )}
+            <div className="pr-12">
+              <button
+                type="button"
+                onClick={() => {
+                  setDraftTitle(roster.name);
+                  setIsEditingTitle(true);
+                  setTitleError(null);
+                }}
+                className="font-heading text-left text-3xl font-semibold tracking-tight text-slate-950 transition hover:text-emerald-700"
+              >
+                {roster.name}
+              </button>
+            </div>
+          )}
         </div>
       }
       backHref="/"
@@ -352,174 +462,218 @@ export default function RosterDetailPage({
         onConfirm={() => void handleDeleteRoster()}
         onCancel={() => setIsDeleteDialogOpen(false)}
       />
-      <section className="rounded-[24px] border border-white/70 bg-white/90 p-5 shadow-sm">
-        <div className="space-y-3">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            {activeSession ? (
+      <Dialog open={isHelpDialogOpen} onClose={() => setIsHelpDialogOpen(false)}>
+        <Card className="w-full border border-white/70 bg-white shadow-xl ring-0">
+          <h2 className="font-heading text-xl font-semibold tracking-tight text-slate-950">
+            How Attendance Sharing Works
+          </h2>
+          <div className="mt-4 space-y-3 text-sm leading-6 text-slate-600">
+            <p>
+              1. Tap <span className="font-semibold text-slate-950">Start</span> to open the attendance session.
+            </p>
+            <p>
+              2. Tap <span className="font-semibold text-slate-950">Copy link</span> or <span className="font-semibold text-slate-950">Open</span>, then send that link to the attendance taker.
+            </p>
+            <p>
+              3. When attendance is finished, tap <span className="font-semibold text-slate-950">Stop</span> and use <span className="font-semibold text-slate-950">Share Attendance</span> to send the CSV.
+            </p>
+          </div>
+          <div className="mt-6">
+            <button
+              type="button"
+              onClick={() => setIsHelpDialogOpen(false)}
+              className="inline-flex h-11 w-full items-center justify-center rounded-full bg-slate-950 px-4 text-sm font-medium text-white transition hover:bg-slate-800"
+            >
+              Close
+            </button>
+          </div>
+        </Card>
+      </Dialog>
+      <section
+        className={`rounded-[24px] border p-5 shadow-sm transition ${
+          activeSession
+            ? "border-emerald-200 bg-emerald-100/80"
+            : "border-white/70 bg-white/90"
+        }`}
+      >
+        <div className="flex flex-col items-center gap-3 text-center">
+          {activeSession ? (
+            <div className="flex flex-wrap items-center justify-center gap-3">
               <button
                 type="button"
                 onClick={() => setIsStopDialogOpen(true)}
                 disabled={isStoppingSession}
-                className="inline-flex h-11 items-center justify-center rounded-full bg-slate-950 px-4 text-sm font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+                aria-label={stopControlLabel}
+                title={stopControlLabel}
+                className="inline-flex h-11 items-center justify-center gap-2 rounded-full bg-rose-600 px-5 text-sm font-medium text-white transition hover:bg-rose-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-400 disabled:cursor-not-allowed disabled:bg-rose-200"
               >
-                <Square className="mr-2 h-4 w-4" />
-                {isStoppingSession ? "Stopping..." : "Stop session"}
+                <Square className="h-4 w-4" />
+                <span>{stopControlLabel}</span>
               </button>
-            ) : (
+
+              <button
+                type="button"
+                onClick={() => void handleCopyEditorLink()}
+                aria-label={copiedLink ? "Copied editor link" : "Copy editor link"}
+                title={copiedLink ? "Copied editor link" : "Copy editor link"}
+                className="inline-flex h-11 items-center justify-center gap-2 rounded-full border border-emerald-200 bg-white/90 px-4 text-sm font-medium text-emerald-950 transition hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+              >
+                {copiedLink ? (
+                  <Check aria-hidden="true" className="h-4 w-4 text-emerald-700" />
+                ) : (
+                  <Copy aria-hidden="true" className="h-4 w-4" />
+                )}
+                <span>{copiedLink ? "Copied link" : "Copy link"}</span>
+              </button>
+
+              <Link
+                href={editorPath}
+                target="_blank"
+                className="inline-flex h-11 items-center justify-center gap-2 rounded-full border border-emerald-200 bg-white/90 px-4 text-sm font-medium text-emerald-950 transition hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+              >
+                <ExternalLink aria-hidden="true" className="h-4 w-4" />
+                <span>Open</span>
+              </Link>
+            </div>
+          ) : (
+            <div className="flex flex-wrap items-center justify-center gap-3">
               <button
                 type="button"
                 onClick={() =>
                   void (latestSession ? handleResumeSession() : handleStartSession())
                 }
                 disabled={isStartingSession || !hasStudents}
-                className="inline-flex h-11 items-center justify-center rounded-full bg-slate-950 px-4 text-sm font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+                aria-label={startControlLabel}
+                title={startControlLabel}
+                className="inline-flex h-11 items-center justify-center gap-2 rounded-full bg-emerald-600 px-5 text-sm font-medium text-white transition hover:bg-emerald-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 disabled:cursor-not-allowed disabled:bg-emerald-200"
               >
-                <Play className="mr-2 h-4 w-4 fill-current" />
-                {isStartingSession
-                  ? latestSession
-                    ? "Resuming..."
-                    : "Starting..."
-                  : hasStudents
-                    ? latestSession
-                      ? "Resume session"
-                      : "Start session"
-                    : "Add students to start"}
+                <Play className="h-4 w-4 fill-current" />
+                <span>{startControlLabel}</span>
               </button>
-            )}
+            </div>
+          )}
 
+          {sessionError ? (
+            <p className="text-sm text-rose-700">{sessionError}</p>
+          ) : null}
+
+          {!hasStudents ? (
+            <p className="text-sm text-slate-500">Add students before starting a session.</p>
+          ) : null}
+        </div>
+      </section>
+
+      <section className="overflow-hidden rounded-[28px] border border-white/70 bg-white/90 shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-5 py-4">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="inline-flex items-center gap-2 rounded-full bg-slate-100 px-3 py-1.5 text-sm font-semibold text-slate-700">
+              <span>{data.students.length}</span>
+              <User aria-hidden="true" className="h-4 w-4" />
+            </span>
+            <span className="inline-flex items-center rounded-full bg-emerald-100 px-3 py-1.5 text-sm font-semibold text-emerald-800">
+              {presentCount} Present
+            </span>
+            <span className="inline-flex items-center rounded-full bg-rose-100 px-3 py-1.5 text-sm font-semibold text-rose-700">
+              {absentCount} Absent
+            </span>
+          </div>
+          <div className="flex flex-wrap gap-3">
             {latestSession ? (
               <button
                 type="button"
                 onClick={() => void handleExportCsv()}
                 disabled={!sessionExport || isExporting}
-                className="inline-flex h-11 items-center justify-center rounded-full border border-slate-300 bg-white px-4 text-sm font-medium text-slate-700 transition hover:border-slate-400 hover:text-slate-950 disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-400"
+                aria-label={exportControlLabel}
+                title={exportControlLabel}
+                className="inline-flex h-11 items-center justify-center gap-2 rounded-full border border-slate-300 bg-white px-4 text-sm font-medium text-slate-700 transition hover:border-slate-400 hover:text-slate-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-400"
               >
-                {isExporting
-                  ? canShareCsvFile
-                    ? "Opening share sheet..."
-                    : "Exporting..."
-                  : canShareCsvFile
-                    ? "Share attendance CSV"
-                    : "Export attendance CSV"}
+                <Share aria-hidden="true" className="h-4 w-4" />
+                <span>Share Attendance</span>
               </button>
             ) : null}
-          </div>
 
-          {latestSession ? (
-            <div
-              className={`rounded-[24px] border px-4 py-4 ${
-                latestSession.isOpen
-                  ? "border-emerald-200 bg-emerald-50/80"
-                  : "border-slate-200 bg-slate-50/90"
-              }`}
-            >
-              <div>
-                <div
-                  className={`text-xs font-semibold uppercase tracking-[0.16em] ${
-                    latestSession.isOpen ? "text-emerald-700" : "text-slate-500"
-                  }`}
-                >
-                  {latestSession.isOpen ? "Active session" : "Inactive session"}
-                </div>
-                <div className="mt-1 font-semibold text-slate-950">{latestSession.title}</div>
-                <div className="mt-1 text-sm text-slate-600">{formatDate(latestSession.date)}</div>
-              </div>
-              {latestSession.isOpen ? (
-                <div className="mt-4 flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => void handleCopyEditorLink()}
-                    title="Copy editor link"
-                    className={`min-w-0 flex-1 rounded-2xl border px-4 py-3 text-left text-sm outline-none transition focus-visible:ring-2 focus-visible:ring-emerald-500 ${
-                      copiedLink
-                        ? "border-emerald-400 bg-emerald-100 text-emerald-950"
-                        : "border-emerald-200 bg-white text-slate-700 hover:border-emerald-300 hover:bg-emerald-100/60 hover:text-slate-950 active:scale-[0.99]"
-                    }`}
-                  >
-                    <span className="flex items-center justify-between gap-3">
-                      <span className="block min-w-0">
-                        <span className="block truncate font-medium">{editorUrl}</span>
-                        {copiedLink ? (
-                          <span className="mt-1 block text-xs font-semibold uppercase tracking-[0.16em] text-emerald-700">
-                            Copied to clipboard
-                          </span>
-                        ) : null}
-                      </span>
-                      {copiedLink ? (
-                        <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-white px-2 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-emerald-700">
-                          <Check aria-hidden="true" className="h-3.5 w-3.5" />
-                          Copied
-                        </span>
-                      ) : (
-                        <span className="shrink-0 text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
-                          Copy
-                        </span>
-                      )}
-                    </span>
-                  </button>
-                  <Link
-                    href={editorPath}
-                    target="_blank"
-                    className="inline-flex h-11 shrink-0 items-center justify-center rounded-full bg-slate-950 px-4 text-sm font-medium text-white transition hover:bg-slate-800"
-                  >
-                    Open
-                  </Link>
-                </div>
-              ) : null}
-            </div>
-          ) : null}
-
-          {sessionError ? (
-            <p className="text-sm text-rose-700">{sessionError}</p>
-          ) : null}
-        </div>
-      </section>
-
-      <section className="rounded-[28px] border border-white/70 bg-white/90 p-5 shadow-sm">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="inline-flex items-center gap-2 text-lg font-semibold tracking-tight text-slate-950">
-            <User aria-hidden="true" className="h-5 w-5 text-slate-500" />
-            <span>{data.students.length}</span>
-          </div>
-          <div className="flex flex-wrap gap-3">
             <Link
               href={`/rosters/import?rosterId=${roster._id}`}
-              className="inline-flex h-11 items-center justify-center rounded-full border border-slate-300 px-4 text-sm font-medium text-slate-700 transition hover:border-slate-400 hover:text-slate-950"
+              className="inline-flex h-11 items-center justify-center gap-2 rounded-full border border-slate-300 px-4 text-sm font-medium text-slate-700 transition hover:border-slate-400 hover:text-slate-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
             >
-              Update roster
+              <Pencil aria-hidden="true" className="h-4 w-4" />
+              <span>Roster</span>
             </Link>
           </div>
         </div>
 
-        <div className="mt-4 overflow-hidden rounded-[24px] border border-slate-200">
-          <div className="max-h-[32rem] overflow-auto">
-            <table className="min-w-full divide-y divide-slate-200 text-left text-sm">
-              <thead className="sticky top-0 bg-slate-50">
-                <tr>
-                  <th className="px-4 py-3 font-medium text-slate-600">Student</th>
-                  <th className="px-4 py-3 font-medium text-slate-600">Student ID</th>
-                  <th className="px-4 py-3 font-medium text-slate-600">Raw import</th>
+        <div className="max-h-[32rem] overflow-auto">
+          <table className="min-w-full divide-y divide-slate-200 text-left text-sm">
+            <thead className="sticky top-0 bg-slate-50">
+              <tr>
+                <th className="px-4 py-3 font-medium text-slate-600">
+                  <button
+                    type="button"
+                    onClick={() => toggleSort("firstName")}
+                    className="transition hover:text-slate-950"
+                  >
+                    First{sortIndicator("firstName")}
+                  </button>
+                </th>
+                <th className="px-4 py-3 font-medium text-slate-600">
+                  <button
+                    type="button"
+                    onClick={() => toggleSort("lastName")}
+                    className="transition hover:text-slate-950"
+                  >
+                    Last{sortIndicator("lastName")}
+                  </button>
+                </th>
+                <th className="px-4 py-3 font-medium text-slate-600">
+                  <button
+                    type="button"
+                    onClick={() => toggleSort("studentId")}
+                    className="transition hover:text-slate-950"
+                  >
+                    Student ID{sortIndicator("studentId")}
+                  </button>
+                </th>
+                <th className="px-4 py-3 font-medium text-slate-600">
+                  <button
+                    type="button"
+                    onClick={() => toggleSort("status")}
+                    className="transition hover:text-slate-950"
+                  >
+                    Status{sortIndicator("status")}
+                  </button>
+                </th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100 bg-white">
+              {students.map((student) => (
+                <tr key={student._id}>
+                  <td className="px-4 py-3 font-medium text-slate-900">{student.firstName}</td>
+                  <td className="px-4 py-3 font-medium text-slate-900">{student.lastName}</td>
+                  <td className="px-4 py-3 text-slate-700">{student.studentId}</td>
+                  <td className="px-4 py-3">
+                    <span
+                      className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${
+                        student.statusTone === "present"
+                          ? "bg-emerald-100 text-emerald-800"
+                          : student.statusTone === "absent"
+                            ? "bg-rose-100 text-rose-700"
+                            : student.statusTone === "loading"
+                              ? "bg-amber-100 text-amber-800"
+                              : "bg-slate-100 text-slate-600"
+                      }`}
+                    >
+                      {student.statusLabel}
+                    </span>
+                  </td>
                 </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 bg-white">
-                {data.students.map((student) => (
-                  <tr key={student._id}>
-                    <td className="px-4 py-3">
-                      <div className="font-medium text-slate-900">{student.displayName}</div>
-                    </td>
-                    <td className="px-4 py-3 text-slate-700">{student.studentId}</td>
-                    <td className="px-4 py-3 text-slate-500">{student.rawName}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+              ))}
+            </tbody>
+          </table>
         </div>
       </section>
 
       <section className="rounded-[28px] border border-rose-200 bg-rose-50/80 p-5 shadow-sm">
-        <h2 className="font-heading text-lg font-semibold tracking-tight text-rose-900">Danger</h2>
-        <div className="mt-4">
+        <div className="flex justify-center">
           <button
             type="button"
             onClick={() => setIsDeleteDialogOpen(true)}

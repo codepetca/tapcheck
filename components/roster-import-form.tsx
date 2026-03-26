@@ -4,29 +4,61 @@ import Papa from "papaparse";
 import { useMutation, useQuery } from "convex/react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import { api } from "@/convex/api";
 import type { Id } from "@/convex/model";
+import { generateRosterName } from "@/lib/roster-names";
 import { buildImportPreview, guessColumnMapping, type ColumnMapping } from "@/lib/students";
 
 type CsvRow = Record<string, string>;
 type ImportSource = "file" | "paste" | null;
+type SourceMode = "file" | "paste";
 
 const PASTED_NAME_COLUMN = "Student Name";
 const PASTED_ID_COLUMN = "Student ID";
 
-function parsePastedStudentList(input: string): CsvRow[] {
-  const parsed = Papa.parse<string[]>(input, {
-    header: false,
-    skipEmptyLines: true,
-  });
-
-  if (parsed.errors.length > 0) {
-    throw new Error(parsed.errors[0]?.message ?? "Could not parse pasted student list.");
+function splitPastedLine(line: string) {
+  const trimmed = line.trim();
+  if (!trimmed) {
+    return null;
   }
 
-  const rows = parsed.data
-    .map((row) => row.map((value) => String(value ?? "").trim()))
-    .filter((row) => row.some(Boolean));
+  if (trimmed.includes("\t")) {
+    const [studentId, ...nameParts] = trimmed.split("\t");
+    return {
+      studentId: studentId?.trim() ?? "",
+      studentName: nameParts.join(" ").trim(),
+    };
+  }
+
+  const commaParts = trimmed.split(",");
+  if (commaParts.length >= 2) {
+    return {
+      studentId: commaParts[0]?.trim() ?? "",
+      studentName: commaParts.slice(1).join(",").trim(),
+    };
+  }
+
+  const match = trimmed.match(/^(\S+)\s+(.+)$/);
+  if (match) {
+    return {
+      studentId: match[1]?.trim() ?? "",
+      studentName: match[2]?.trim() ?? "",
+    };
+  }
+
+  return {
+    studentId: trimmed,
+    studentName: "",
+  };
+}
+
+function parsePastedStudentList(input: string): CsvRow[] {
+  const rows = input
+    .split(/\r?\n/)
+    .map((line) => splitPastedLine(line))
+    .filter((row): row is { studentId: string; studentName: string } => row !== null)
+    .map((row) => [row.studentId, row.studentName]);
 
   if (rows.length === 0) {
     return [];
@@ -65,6 +97,7 @@ export function RosterImportForm() {
   const [fileName, setFileName] = useState("");
   const [pastedText, setPastedText] = useState("");
   const [importSource, setImportSource] = useState<ImportSource>(null);
+  const [sourceMode, setSourceMode] = useState<SourceMode>("file");
   const [mapping, setMapping] = useState<ColumnMapping>({
     nameColumn: null,
     studentIdColumn: null,
@@ -73,11 +106,16 @@ export function RosterImportForm() {
   const [parseError, setParseError] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [pastedRosterName, setPastedRosterName] = useState(() => generateRosterName());
+  const [pendingSourceMode, setPendingSourceMode] = useState<SourceMode | null>(null);
 
   const preview = buildImportPreview(rows, mapping);
   const hasImportData = rows.length > 0;
   const isEditingExistingRoster = Boolean(existingRosterId);
   const existingRosterName = existingRoster?.roster.name ?? "";
+  const hasFileSourceData = importSource === "file" && (Boolean(fileName) || rows.length > 0);
+  const hasPasteSourceData =
+    importSource === "paste" && (Boolean(pastedText.trim()) || rows.length > 0);
   const importedStudentIds = new Set(preview.validStudents.map((student) => student.studentId));
   const omittedStudents =
     isEditingExistingRoster && existingRoster
@@ -90,11 +128,24 @@ export function RosterImportForm() {
       return;
     }
 
-    const nextName = preview.inferredRosterName || existingRosterName;
+    const nextName =
+      importSource === "paste"
+        ? isEditingExistingRoster
+          ? existingRosterName
+          : pastedRosterName
+        : preview.inferredRosterName || existingRosterName;
     if (nextName && rosterName !== nextName) {
       setRosterName(nextName);
     }
-  }, [existingRosterName, preview.inferredRosterName, rosterName, rosterNameTouched]);
+  }, [
+    existingRosterName,
+    importSource,
+    isEditingExistingRoster,
+    pastedRosterName,
+    preview.inferredRosterName,
+    rosterName,
+    rosterNameTouched,
+  ]);
 
   useEffect(() => {
     if (omittedStudents.length === 0 && deactivateMissing) {
@@ -102,13 +153,64 @@ export function RosterImportForm() {
     }
   }, [deactivateMissing, omittedStudents.length]);
 
-  function applyMapping(nextMapping: ColumnMapping, nextRows = rows) {
+  function applyMapping(
+    nextMapping: ColumnMapping,
+    nextRows = rows,
+    nextImportSource: ImportSource = importSource,
+  ) {
     setMapping(nextMapping);
 
     if (!rosterNameTouched) {
+      if (nextImportSource === "paste" && !isEditingExistingRoster) {
+        setRosterName(pastedRosterName);
+        return;
+      }
+
       const nextPreview = buildImportPreview(nextRows, nextMapping);
       setRosterName(nextPreview.inferredRosterName || existingRosterName);
     }
+  }
+
+  function clearImportState(nextSourceMode: SourceMode) {
+    const nextGeneratedRosterName = generateRosterName();
+
+    setHeaders([]);
+    setRows([]);
+    setFileName("");
+    setPastedText("");
+    setImportSource(null);
+    setParseError(null);
+    setSubmitError(null);
+    setMapping({ nameColumn: null, studentIdColumn: null, titleColumn: null });
+    setPastedRosterName(nextGeneratedRosterName);
+
+    if (!rosterNameTouched) {
+      setRosterName(
+        nextSourceMode === "paste"
+          ? isEditingExistingRoster
+            ? existingRosterName
+            : nextGeneratedRosterName
+          : existingRosterName,
+      );
+    }
+  }
+
+  function switchSourceMode(nextSourceMode: SourceMode) {
+    if (sourceMode === nextSourceMode) {
+      return;
+    }
+
+    const needsConfirmation =
+      (sourceMode === "file" && hasFileSourceData) ||
+      (sourceMode === "paste" && hasPasteSourceData);
+
+    if (needsConfirmation) {
+      setPendingSourceMode(nextSourceMode);
+      return;
+    }
+
+    setSourceMode(nextSourceMode);
+    clearImportState(nextSourceMode);
   }
 
   async function handleFileChange(file: File | null) {
@@ -120,7 +222,8 @@ export function RosterImportForm() {
       setRows([]);
       setFileName("");
       setImportSource(null);
-      applyMapping({ nameColumn: null, studentIdColumn: null, titleColumn: null }, []);
+      setPastedRosterName(generateRosterName());
+      applyMapping({ nameColumn: null, studentIdColumn: null, titleColumn: null }, [], null);
       if (!rosterNameTouched) {
         setRosterName(existingRosterName);
       }
@@ -150,14 +253,16 @@ export function RosterImportForm() {
       setFileName(file.name);
       setPastedText("");
       setImportSource("file");
-      applyMapping(nextMapping, normalizedRows);
+      setPastedRosterName(generateRosterName());
+      applyMapping(nextMapping, normalizedRows, "file");
     } catch (error) {
       setParseError(error instanceof Error ? error.message : "Could not parse CSV.");
       setHeaders([]);
       setRows([]);
       setFileName("");
       setImportSource(null);
-      applyMapping({ nameColumn: null, studentIdColumn: null, titleColumn: null }, []);
+      setPastedRosterName(generateRosterName());
+      applyMapping({ nameColumn: null, studentIdColumn: null, titleColumn: null }, [], null);
       if (!rosterNameTouched) {
         setRosterName(existingRosterName);
       }
@@ -174,7 +279,8 @@ export function RosterImportForm() {
         setHeaders([]);
         setRows([]);
         setImportSource(null);
-        applyMapping({ nameColumn: null, studentIdColumn: null, titleColumn: null }, []);
+        setPastedRosterName(generateRosterName());
+        applyMapping({ nameColumn: null, studentIdColumn: null, titleColumn: null }, [], null);
         if (!rosterNameTouched) {
           setRosterName(existingRosterName);
         }
@@ -190,12 +296,18 @@ export function RosterImportForm() {
         nameColumn: PASTED_NAME_COLUMN,
         titleColumn: null,
       };
+      const nextPastedRosterName =
+        importSource === "paste" ? pastedRosterName : generateRosterName();
 
       setHeaders(pastedHeaders);
       setRows(pastedRows);
       setFileName("");
       setImportSource("paste");
-      applyMapping(nextMapping, pastedRows);
+      setPastedRosterName(nextPastedRosterName);
+      setMapping(nextMapping);
+      if (!rosterNameTouched) {
+        setRosterName(isEditingExistingRoster ? existingRosterName : nextPastedRosterName);
+      }
     } catch (error) {
       setParseError(
         error instanceof Error ? error.message : "Could not parse pasted student list.",
@@ -204,7 +316,8 @@ export function RosterImportForm() {
       setRows([]);
       setFileName("");
       setImportSource(null);
-      applyMapping({ nameColumn: null, studentIdColumn: null, titleColumn: null }, []);
+      setPastedRosterName(generateRosterName());
+      applyMapping({ nameColumn: null, studentIdColumn: null, titleColumn: null }, [], null);
       if (!rosterNameTouched) {
         setRosterName(existingRosterName);
       }
@@ -253,54 +366,88 @@ export function RosterImportForm() {
 
   return (
     <form onSubmit={handleImport} className="space-y-4">
+      <ConfirmDialog
+        open={pendingSourceMode !== null}
+        title="Switch import source?"
+        description={`Switching to ${pendingSourceMode === "paste" ? "Paste list" : "Upload CSV"} will clear the current preview.`}
+        confirmLabel={pendingSourceMode === "paste" ? "Use Paste list" : "Use Upload CSV"}
+        onConfirm={() => {
+          if (!pendingSourceMode) {
+            return;
+          }
+          setSourceMode(pendingSourceMode);
+          clearImportState(pendingSourceMode);
+          setPendingSourceMode(null);
+        }}
+        onCancel={() => setPendingSourceMode(null)}
+      />
       <section className="rounded-[28px] border border-white/70 bg-white/90 p-5 shadow-sm">
-        <h2 className="font-heading text-lg font-semibold tracking-tight text-slate-950">
-          {isEditingExistingRoster ? "Update roster" : "Upload SchoolCashOnline CSV"}
-        </h2>
-        <div className="mt-4 space-y-4">
-          <label className="block">
-            <input
-              type="file"
-              accept=".csv,text/csv"
-              onChange={(event) => void handleFileChange(event.target.files?.[0] ?? null)}
-              className="sr-only"
-            />
-            <span className="flex flex-wrap items-center gap-3 rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm text-slate-600">
-              <span className="inline-flex h-11 items-center justify-center rounded-full bg-slate-950 px-4 text-sm font-medium text-white">
-                Upload SchoolCash CSV File
-              </span>
-              <span>
-                {fileName && importSource === "file"
-                  ? fileName
-                  : "No SchoolCash CSV file chosen"}
-              </span>
-            </span>
-          </label>
-
-          <div className="flex items-center gap-3 pt-1">
-            <div className="h-px flex-1 bg-slate-200" />
-            <span className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">
-              Or
-            </span>
-            <div className="h-px flex-1 bg-slate-200" />
+        <div className="space-y-4">
+          <div className="flex rounded-2xl bg-slate-100 p-1">
+            <button
+              type="button"
+              onClick={() => switchSourceMode("file")}
+              className={`flex-1 rounded-[18px] px-4 py-2.5 text-sm font-medium transition ${
+                sourceMode === "file"
+                  ? "bg-white text-slate-950 shadow-sm"
+                  : "text-slate-600 hover:text-slate-950"
+              }`}
+            >
+              Upload CSV
+            </button>
+            <button
+              type="button"
+              onClick={() => switchSourceMode("paste")}
+              className={`flex-1 rounded-[18px] px-4 py-2.5 text-sm font-medium transition ${
+                sourceMode === "paste"
+                  ? "bg-white text-slate-950 shadow-sm"
+                  : "text-slate-600 hover:text-slate-950"
+              }`}
+            >
+              Paste list
+            </button>
           </div>
 
-          <label className="block">
-            <span className="mb-2 block text-sm font-medium text-slate-700">
-              Paste student ID and name list
-            </span>
-            <textarea
-              value={pastedText}
-              onChange={(event) => handlePastedTextChange(event.target.value)}
-              placeholder={`123456\tSmith, John\n234567\tJones, Maya`}
-              rows={6}
-              className="w-full rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm text-slate-950 outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
-            />
-          </label>
+          {sourceMode === "file" ? (
+            <label className="block">
+              <input
+                type="file"
+                accept=".csv,text/csv"
+                onChange={(event) => void handleFileChange(event.target.files?.[0] ?? null)}
+                className="sr-only"
+              />
+              <span className="flex flex-wrap items-center gap-3 rounded-2xl bg-white px-4 py-3 text-sm text-slate-600">
+                <span className="inline-flex h-11 items-center justify-center rounded-full bg-slate-950 px-4 text-sm font-medium text-white">
+                  Upload SchoolCash CSV File
+                </span>
+                <span
+                  className={
+                    fileName && importSource === "file"
+                      ? "font-semibold text-slate-950"
+                      : "text-slate-500"
+                  }
+                >
+                  {fileName && importSource === "file"
+                    ? fileName
+                    : "No file chosen"}
+                </span>
+              </span>
+            </label>
+          ) : (
+            <label className="block">
+              <span className="mb-2 block text-sm font-medium text-slate-700">
+                Paste or type student ID and name
+              </span>
+              <textarea
+                value={pastedText}
+                onChange={(event) => handlePastedTextChange(event.target.value)}
+                placeholder={`123456\tSmith, John\n234567\tJones, Maya`}
+                rows={6}
+                className="w-full rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm text-slate-950 outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
+              />
+            </label>
+          )}
         </div>
-        {importSource === "paste" ? (
-          <p className="mt-3 text-sm text-slate-500">Using pasted student list</p>
-        ) : null}
         {parseError ? (
           <p className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
             {parseError}
@@ -308,7 +455,7 @@ export function RosterImportForm() {
         ) : null}
         {hasImportData ? (
           <>
-            <div className="space-y-4 border-t border-slate-200 pt-4">
+            <div className="space-y-4">
               <label className="block">
                 <span className="mb-2 block text-sm font-medium text-slate-700">Roster name</span>
                 <input
@@ -322,72 +469,74 @@ export function RosterImportForm() {
                 />
               </label>
 
-              <div className="grid gap-4 sm:grid-cols-2">
-                <label className="block">
-                  <span className="mb-2 block text-sm font-medium text-slate-700">Name column</span>
-                  <select
-                    value={mapping.nameColumn ?? ""}
-                    onChange={(event) =>
-                      applyMapping({
-                        ...mapping,
-                        nameColumn: event.target.value || null,
-                      })
-                    }
-                    className="h-12 w-full rounded-2xl border border-slate-300 bg-white px-4 text-base text-slate-950 outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
-                  >
-                    <option value="">Select a column</option>
-                    {headers.map((header) => (
-                      <option key={header} value={header}>
-                        {header}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+              {importSource === "file" ? (
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <label className="block">
+                    <span className="mb-2 block text-sm font-medium text-slate-700">Name column</span>
+                    <select
+                      value={mapping.nameColumn ?? ""}
+                      onChange={(event) =>
+                        applyMapping({
+                          ...mapping,
+                          nameColumn: event.target.value || null,
+                        })
+                      }
+                      className="h-12 w-full rounded-2xl border border-slate-300 bg-white px-4 text-base text-slate-950 outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
+                    >
+                      <option value="">Select a column</option>
+                      {headers.map((header) => (
+                        <option key={header} value={header}>
+                          {header}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
 
-                <label className="block">
-                  <span className="mb-2 block text-sm font-medium text-slate-700">Student ID column</span>
-                  <select
-                    value={mapping.studentIdColumn ?? ""}
-                    onChange={(event) =>
-                      applyMapping({
-                        ...mapping,
-                        studentIdColumn: event.target.value || null,
-                      })
-                    }
-                    className="h-12 w-full rounded-2xl border border-slate-300 bg-white px-4 text-base text-slate-950 outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
-                  >
-                    <option value="">Select a column</option>
-                    {headers.map((header) => (
-                      <option key={header} value={header}>
-                        {header}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                  <label className="block">
+                    <span className="mb-2 block text-sm font-medium text-slate-700">Student ID column</span>
+                    <select
+                      value={mapping.studentIdColumn ?? ""}
+                      onChange={(event) =>
+                        applyMapping({
+                          ...mapping,
+                          studentIdColumn: event.target.value || null,
+                        })
+                      }
+                      className="h-12 w-full rounded-2xl border border-slate-300 bg-white px-4 text-base text-slate-950 outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
+                    >
+                      <option value="">Select a column</option>
+                      {headers.map((header) => (
+                        <option key={header} value={header}>
+                          {header}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
 
-                <label className="block sm:col-span-2">
-                  <span className="mb-2 block text-sm font-medium text-slate-700">
-                    Roster title column
-                  </span>
-                  <select
-                    value={mapping.titleColumn ?? ""}
-                    onChange={(event) =>
-                      applyMapping({
-                        ...mapping,
-                        titleColumn: event.target.value || null,
-                      })
-                    }
-                    className="h-12 w-full rounded-2xl border border-slate-300 bg-white px-4 text-base text-slate-950 outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
-                  >
-                    <option value="">No title column</option>
-                    {headers.map((header) => (
-                      <option key={header} value={header}>
-                        {header}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              </div>
+                  <label className="block sm:col-span-2">
+                    <span className="mb-2 block text-sm font-medium text-slate-700">
+                      Roster title column
+                    </span>
+                    <select
+                      value={mapping.titleColumn ?? ""}
+                      onChange={(event) =>
+                        applyMapping({
+                          ...mapping,
+                          titleColumn: event.target.value || null,
+                        })
+                      }
+                      className="h-12 w-full rounded-2xl border border-slate-300 bg-white px-4 text-base text-slate-950 outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
+                    >
+                      <option value="">No title column</option>
+                      {headers.map((header) => (
+                        <option key={header} value={header}>
+                          {header}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+              ) : null}
             </div>
 
             {preview.errors.length > 0 ? (
@@ -398,13 +547,13 @@ export function RosterImportForm() {
               </div>
             ) : null}
 
-            {preview.inferredRosterName ? (
+            {importSource === "file" && preview.inferredRosterName ? (
               <p className="mt-4 text-sm text-slate-600">
                 Inferred roster title: <span className="font-medium text-slate-900">{preview.inferredRosterName}</span>
               </p>
             ) : null}
 
-            {preview.titleWarnings.length > 0 ? (
+            {importSource === "file" && preview.titleWarnings.length > 0 ? (
               <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
                 {preview.titleWarnings.map((warning) => (
                   <p key={warning}>{warning}</p>
