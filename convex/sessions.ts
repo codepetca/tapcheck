@@ -1,29 +1,21 @@
 import { v } from "convex/values";
+import { createShareToken } from "../lib/session-links";
 import type { MutationCtx } from "./server";
-import { mutation, query } from "./server";
+import { mutation } from "./server";
 
 async function tokenExists(ctx: MutationCtx, token: string) {
-  const [editorMatch, viewerMatch] = await Promise.all([
-    ctx.db
-      .query("sessions")
-      .withIndex("by_editorToken", (q) => q.eq("editorToken", token))
-      .unique(),
-    ctx.db
-      .query("sessions")
-      .withIndex("by_viewerToken", (q) => q.eq("viewerToken", token))
-      .unique(),
-  ]);
+  const editorMatch = await ctx.db
+    .query("sessions")
+    .withIndex("by_editorToken", (q) => q.eq("editorToken", token))
+    .unique();
 
-  return Boolean(editorMatch || viewerMatch);
+  return Boolean(editorMatch);
 }
 
 export const create = mutation({
   args: {
     rosterId: v.id("rosters"),
-    title: v.string(),
     date: v.string(),
-    editorToken: v.string(),
-    viewerToken: v.string(),
   },
   returns: v.id("sessions"),
   handler: async (ctx, args) => {
@@ -32,16 +24,25 @@ export const create = mutation({
       throw new Error("Roster not found.");
     }
 
-    if (!args.title.trim()) {
-      throw new Error("Session title is required.");
+    const existingSessions = await ctx.db
+      .query("sessions")
+      .withIndex("by_rosterId_createdAt", (q) => q.eq("rosterId", args.rosterId))
+      .collect();
+
+    if (existingSessions.length > 0) {
+      throw new Error("This roster already has a session.");
     }
 
-    if (args.editorToken === args.viewerToken) {
-      throw new Error("Editor and viewer tokens must be different.");
+    let editorToken = "";
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      editorToken = createShareToken();
+      if (!(await tokenExists(ctx, editorToken))) {
+        break;
+      }
     }
 
-    if ((await tokenExists(ctx, args.editorToken)) || (await tokenExists(ctx, args.viewerToken))) {
-      throw new Error("Session token collision. Please try again.");
+    if (!editorToken || (await tokenExists(ctx, editorToken))) {
+      throw new Error("Could not generate editor link. Please try again.");
     }
 
     const students = await ctx.db
@@ -59,11 +60,10 @@ export const create = mutation({
 
     const sessionId = await ctx.db.insert("sessions", {
       rosterId: args.rosterId,
-      title: args.title.trim(),
+      title: roster.name,
       date: args.date,
       isOpen: true,
-      editorToken: args.editorToken,
-      viewerToken: args.viewerToken,
+      editorToken,
       createdAt,
     });
 
@@ -81,49 +81,47 @@ export const create = mutation({
   },
 });
 
-export const getSharePageData = query({
+export const stop = mutation({
   args: { sessionId: v.id("sessions") },
-  returns: v.union(
-    v.null(),
-    v.object({
-      session: v.object({
-        _id: v.id("sessions"),
-        title: v.string(),
-        date: v.string(),
-        editorToken: v.string(),
-        viewerToken: v.string(),
-        isOpen: v.boolean(),
-      }),
-      roster: v.object({
-        _id: v.id("rosters"),
-        name: v.string(),
-      }),
-    }),
-  ),
+  returns: v.null(),
   handler: async (ctx, args) => {
     const session = await ctx.db.get(args.sessionId);
     if (!session) {
+      throw new Error("Session not found.");
+    }
+
+    if (!session.isOpen) {
       return null;
     }
 
-    const roster = await ctx.db.get(session.rosterId);
-    if (!roster) {
+    await ctx.db.patch(args.sessionId, { isOpen: false });
+    return null;
+  },
+});
+
+export const resume = mutation({
+  args: { sessionId: v.id("sessions") },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const session = await ctx.db.get(args.sessionId);
+    if (!session) {
+      throw new Error("Session not found.");
+    }
+
+    if (session.isOpen) {
       return null;
     }
 
-    return {
-      session: {
-        _id: session._id,
-        title: session.title,
-        date: session.date,
-        editorToken: session.editorToken,
-        viewerToken: session.viewerToken,
-        isOpen: session.isOpen,
-      },
-      roster: {
-        _id: roster._id,
-        name: roster.name,
-      },
-    };
+    const rosterSessions = await ctx.db
+      .query("sessions")
+      .withIndex("by_rosterId_createdAt", (q) => q.eq("rosterId", session.rosterId))
+      .collect();
+
+    if (rosterSessions.some((rosterSession) => rosterSession.isOpen)) {
+      throw new Error("This roster already has an active session.");
+    }
+
+    await ctx.db.patch(args.sessionId, { isOpen: true });
+    return null;
   },
 });

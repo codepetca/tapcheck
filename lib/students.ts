@@ -10,12 +10,17 @@ export type NormalizedStudent = {
 export type ColumnMapping = {
   nameColumn: string | null;
   studentIdColumn: string | null;
+  titleColumn: string | null;
 };
 
 export type ImportPreviewRow = NormalizedStudent & {
   rowNumber: number;
   errors: string[];
   isDuplicate: boolean;
+};
+
+type ImportPreviewOptions = {
+  existingStudentIds?: string[];
 };
 
 type CsvRow = Record<string, unknown>;
@@ -104,11 +109,58 @@ export function guessColumnMapping(headers: string[]): ColumnMapping {
     lowered.find(({ normalized }) => normalized.includes("id"))?.raw ??
     null;
 
-  return { nameColumn, studentIdColumn };
+  const titleColumn =
+    lowered.find(
+      ({ normalized }) =>
+        normalized.includes("item name") ||
+        normalized.includes("course name") ||
+        normalized.includes("class name") ||
+        normalized.includes("roster name"),
+    )?.raw ??
+    lowered.find(({ normalized }) => normalized.includes("title"))?.raw ??
+    null;
+
+  return { nameColumn, studentIdColumn, titleColumn };
 }
 
-export function buildImportPreview(rows: CsvRow[], mapping: ColumnMapping) {
+function inferRosterName(rows: CsvRow[], titleColumn: string | null) {
+  if (!titleColumn) {
+    return {
+      inferredRosterName: "",
+      titleWarnings: [] as string[],
+    };
+  }
+
+  const values = rows
+    .map((row) => cleanValue(row[titleColumn]))
+    .filter(Boolean);
+
+  if (values.length === 0) {
+    return {
+      inferredRosterName: "",
+      titleWarnings: [] as string[],
+    };
+  }
+
+  const distinctValues = [...new Set(values)];
+
+  return {
+    inferredRosterName: distinctValues[0] ?? "",
+    titleWarnings:
+      distinctValues.length > 1
+        ? ["Multiple roster titles were found in the selected title column. Using the first value."]
+        : [],
+  };
+}
+
+export function buildImportPreview(
+  rows: CsvRow[],
+  mapping: ColumnMapping,
+  options?: ImportPreviewOptions,
+) {
   const errors: string[] = [];
+  const { inferredRosterName, titleWarnings } = inferRosterName(rows, mapping.titleColumn);
+  const existingStudentIdSet = new Set(options?.existingStudentIds ?? []);
 
   if (!mapping.nameColumn) {
     errors.push("Choose the column containing student names.");
@@ -124,6 +176,8 @@ export function buildImportPreview(rows: CsvRow[], mapping: ColumnMapping) {
       errors,
       duplicateStudentIds: [] as string[],
       validStudents: [] as NormalizedStudent[],
+      inferredRosterName,
+      titleWarnings,
     };
   }
 
@@ -167,10 +221,17 @@ export function buildImportPreview(rows: CsvRow[], mapping: ColumnMapping) {
       row.isDuplicate = true;
       row.errors.push("Duplicate student ID in this import.");
     }
+    if (row.studentId && existingStudentIdSet.has(row.studentId)) {
+      row.errors.push("Student ID already exists in this roster.");
+    }
   }
 
   if (duplicateStudentIds.length > 0) {
     errors.push("Resolve duplicate student IDs before importing.");
+  }
+
+  if (previewRows.some((row) => row.errors.includes("Student ID already exists in this roster."))) {
+    errors.push("Resolve student IDs that already exist in this roster before importing.");
   }
 
   const validStudents = previewRows
@@ -189,5 +250,7 @@ export function buildImportPreview(rows: CsvRow[], mapping: ColumnMapping) {
     errors,
     duplicateStudentIds,
     validStudents,
+    inferredRosterName,
+    titleWarnings,
   };
 }
