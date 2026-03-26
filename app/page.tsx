@@ -70,7 +70,7 @@ export default function HomePage() {
         </p>
       ) : null}
 
-      {rosters === undefined || rosters.length > 0 ? (
+      {rosters !== undefined && rosters.length > 0 ? (
         <section className="rounded-[28px] border border-white/70 bg-white/90 p-5 shadow-sm">
           <div className="flex items-center justify-between gap-4">
             <div>
@@ -80,30 +80,26 @@ export default function HomePage() {
             </div>
           </div>
 
-          {rosters === undefined ? (
-            <div className="mt-4 h-20 animate-pulse rounded-[24px] bg-slate-100" />
-          ) : (
-            <div className="mt-4 space-y-3">
-              {rosters.map((roster) => (
-                <Link
-                  key={roster._id}
-                  href={`/rosters/${roster._id}`}
-                  className="block rounded-[24px] border border-slate-200 bg-slate-50/90 px-4 py-4 transition hover:border-emerald-300 hover:bg-emerald-50/60"
-                >
-                  <div className="flex items-start justify-between gap-4">
-                    <div>
-                      <h3 className="text-base font-semibold text-slate-950">{roster.name}</h3>
-                      <p className="mt-1 text-sm text-slate-500">Created {formatDate(roster.createdAt)}</p>
-                    </div>
-                    <div className="text-right text-sm text-slate-500">
-                      <div>{roster.studentCount} students</div>
-                      <div>{roster.sessionCount} sessions</div>
-                    </div>
+          <div className="mt-4 space-y-3">
+            {rosters.map((roster) => (
+              <Link
+                key={roster._id}
+                href={`/rosters/${roster._id}`}
+                className="block rounded-[24px] border border-slate-200 bg-slate-50/90 px-4 py-4 transition hover:border-emerald-300 hover:bg-emerald-50/60"
+              >
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <h3 className="text-base font-semibold text-slate-950">{roster.name}</h3>
+                    <p className="mt-1 text-sm text-slate-500">Created {formatDate(roster.createdAt)}</p>
                   </div>
-                </Link>
-              ))}
-            </div>
-          )}
+                  <div className="text-right text-sm text-slate-500">
+                    <div>{roster.studentCount} students</div>
+                    <div>{roster.sessionCount} sessions</div>
+                  </div>
+                </div>
+              </Link>
+            ))}
+          </div>
         </section>
       ) : null}
     </PageShell>
