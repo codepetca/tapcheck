@@ -9,10 +9,6 @@ export function buildEditorPath(token: string) {
   return `/s/edit/${token}`;
 }
 
-export function buildViewerPath(token: string) {
-  return `/s/view/${token}`;
-}
-
 export function buildAbsoluteUrl(origin: string, path: string) {
   return new URL(path, origin).toString();
 }

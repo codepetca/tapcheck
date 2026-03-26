@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import { buildDemoRosterStudents } from "../lib/demo-data";
-import { mutation, query } from "./server";
+import type { Id } from "./model";
+import { mutation, query, type MutationCtx } from "./server";
 
 const importedStudentValidator = v.object({
   studentId: v.string(),
@@ -10,6 +11,36 @@ const importedStudentValidator = v.object({
   displayName: v.string(),
   sortKey: v.string(),
 });
+
+async function loadRosterStudents(ctx: MutationCtx, rosterId: Id<"rosters">) {
+  return ctx.db
+    .query("students")
+    .withIndex("by_rosterId_sortKey", (q) => q.eq("rosterId", rosterId))
+    .collect();
+}
+
+function validateImportedStudents(
+  students: Array<{
+    studentId: string;
+  }>,
+) {
+  if (students.length === 0) {
+    throw new Error("At least one valid student is required.");
+  }
+
+  const duplicateIds = new Set<string>();
+  const seenIds = new Set<string>();
+  for (const student of students) {
+    if (seenIds.has(student.studentId)) {
+      duplicateIds.add(student.studentId);
+    }
+    seenIds.add(student.studentId);
+  }
+
+  if (duplicateIds.size > 0) {
+    throw new Error("Duplicate student IDs were found in the import.");
+  }
+}
 
 export const list = query({
   args: {},
@@ -31,7 +62,9 @@ export const list = query({
         const [students, sessions] = await Promise.all([
           ctx.db
             .query("students")
-            .withIndex("by_rosterId_sortKey", (q) => q.eq("rosterId", roster._id))
+            .withIndex("by_rosterId_active_sortKey", (q) =>
+              q.eq("rosterId", roster._id).eq("active", true),
+            )
             .collect(),
           ctx.db
             .query("sessions")
@@ -81,6 +114,7 @@ export const getById = query({
           title: v.string(),
           date: v.string(),
           isOpen: v.boolean(),
+          editorToken: v.string(),
           createdAt: v.number(),
         }),
       ),
@@ -95,7 +129,9 @@ export const getById = query({
     const [students, sessions] = await Promise.all([
       ctx.db
         .query("students")
-        .withIndex("by_rosterId_sortKey", (q) => q.eq("rosterId", args.rosterId))
+        .withIndex("by_rosterId_active_sortKey", (q) =>
+          q.eq("rosterId", args.rosterId).eq("active", true),
+        )
         .collect(),
       ctx.db
         .query("sessions")
@@ -125,6 +161,7 @@ export const getById = query({
           title: session.title,
           date: session.date,
           isOpen: session.isOpen,
+          editorToken: session.editorToken,
           createdAt: session.createdAt,
         })),
     };
@@ -159,22 +196,7 @@ export const importCsv = mutation({
       throw new Error("Roster name is required.");
     }
 
-    if (args.students.length === 0) {
-      throw new Error("At least one valid student is required.");
-    }
-
-    const duplicateIds = new Set<string>();
-    const seenIds = new Set<string>();
-    for (const student of args.students) {
-      if (seenIds.has(student.studentId)) {
-        duplicateIds.add(student.studentId);
-      }
-      seenIds.add(student.studentId);
-    }
-
-    if (duplicateIds.size > 0) {
-      throw new Error("Duplicate student IDs were found in the import.");
-    }
+    validateImportedStudents(args.students);
 
     const rosterId = await ctx.db.insert("rosters", {
       name,
@@ -195,6 +217,95 @@ export const importCsv = mutation({
     }
 
     return rosterId;
+  },
+});
+
+export const rename = mutation({
+  args: {
+    rosterId: v.id("rosters"),
+    name: v.string(),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const roster = await ctx.db.get(args.rosterId);
+    if (!roster) {
+      throw new Error("Roster not found.");
+    }
+
+    const name = args.name.trim();
+    if (!name) {
+      throw new Error("Roster name is required.");
+    }
+
+    await ctx.db.patch(args.rosterId, { name });
+    return null;
+  },
+});
+
+export const importIntoExisting = mutation({
+  args: {
+    rosterId: v.id("rosters"),
+    name: v.string(),
+    students: v.array(importedStudentValidator),
+    deactivateMissing: v.optional(v.boolean()),
+  },
+  returns: v.id("rosters"),
+  handler: async (ctx, args) => {
+    const roster = await ctx.db.get(args.rosterId);
+    if (!roster) {
+      throw new Error("Roster not found.");
+    }
+
+    const name = args.name.trim();
+    if (!name) {
+      throw new Error("Roster name is required.");
+    }
+
+    validateImportedStudents(args.students);
+
+    const existingStudents = await loadRosterStudents(ctx, args.rosterId);
+    const existingByStudentId = new Map(
+      existingStudents.map((student) => [student.studentId, student] as const),
+    );
+
+    await ctx.db.patch(args.rosterId, { name });
+
+    if (args.deactivateMissing) {
+      const incomingIds = new Set(args.students.map((student) => student.studentId));
+      for (const existingStudent of existingStudents) {
+        if (!incomingIds.has(existingStudent.studentId) && existingStudent.active) {
+          await ctx.db.patch(existingStudent._id, { active: false });
+        }
+      }
+    }
+
+    for (const student of args.students) {
+      const existingStudent = existingByStudentId.get(student.studentId);
+      if (existingStudent) {
+        await ctx.db.patch(existingStudent._id, {
+          rawName: student.rawName,
+          firstName: student.firstName,
+          lastName: student.lastName,
+          displayName: student.displayName,
+          sortKey: student.sortKey,
+          active: true,
+        });
+        continue;
+      }
+
+      await ctx.db.insert("students", {
+        rosterId: args.rosterId,
+        studentId: student.studentId,
+        rawName: student.rawName,
+        firstName: student.firstName,
+        lastName: student.lastName,
+        displayName: student.displayName,
+        sortKey: student.sortKey,
+        active: true,
+      });
+    }
+
+    return args.rosterId;
   },
 });
 
@@ -221,5 +332,46 @@ export const seedDemo = mutation({
     }
 
     return rosterId;
+  },
+});
+
+export const remove = mutation({
+  args: {
+    rosterId: v.id("rosters"),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const roster = await ctx.db.get(args.rosterId);
+    if (!roster) {
+      throw new Error("Roster not found.");
+    }
+
+    const [students, sessions] = await Promise.all([
+      loadRosterStudents(ctx, args.rosterId),
+      ctx.db
+        .query("sessions")
+        .withIndex("by_rosterId_createdAt", (q) => q.eq("rosterId", args.rosterId))
+        .collect(),
+    ]);
+
+    for (const session of sessions) {
+      const attendanceRows = await ctx.db
+        .query("attendance")
+        .withIndex("by_sessionId", (q) => q.eq("sessionId", session._id))
+        .collect();
+
+      for (const attendance of attendanceRows) {
+        await ctx.db.delete(attendance._id);
+      }
+
+      await ctx.db.delete(session._id);
+    }
+
+    for (const student of students) {
+      await ctx.db.delete(student._id);
+    }
+
+    await ctx.db.delete(args.rosterId);
+    return null;
   },
 });

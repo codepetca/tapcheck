@@ -27,12 +27,11 @@ export default defineSchema({
     date: v.string(),
     isOpen: v.boolean(),
     editorToken: v.string(),
-    viewerToken: v.string(),
+    viewerToken: v.optional(v.string()),
     createdAt: v.number(),
   })
     .index("by_rosterId_createdAt", ["rosterId", "createdAt"])
-    .index("by_editorToken", ["editorToken"])
-    .index("by_viewerToken", ["viewerToken"]),
+    .index("by_editorToken", ["editorToken"]),
 
   attendance: defineTable({
     sessionId: v.id("sessions"),

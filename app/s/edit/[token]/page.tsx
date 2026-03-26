@@ -6,5 +6,5 @@ export default async function EditorAttendancePage({
   params: Promise<{ token: string }>;
 }) {
   const { token } = await params;
-  return <SessionAttendanceScreen token={token} mode="editor" />;
+  return <SessionAttendanceScreen token={token} />;
 }

@@ -7,6 +7,7 @@ import { useState } from "react";
 import { EmptyState } from "@/components/empty-state";
 import { PageShell } from "@/components/page-shell";
 import { api } from "@/convex/api";
+import { generateRosterName } from "@/lib/roster-names";
 
 function formatDate(timestamp: number) {
   return new Intl.DateTimeFormat(undefined, {
@@ -20,25 +21,16 @@ export default function HomePage() {
   const router = useRouter();
   const rosters = useQuery(api.rosters.list, {});
   const createEmpty = useMutation(api.rosters.createEmpty);
-  const seedDemo = useMutation(api.rosters.seedDemo);
 
-  const [rosterName, setRosterName] = useState("");
   const [isCreating, setIsCreating] = useState(false);
-  const [isSeeding, setIsSeeding] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  async function handleCreateEmpty(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  async function handleCreateEmpty() {
     setError(null);
-
-    if (!rosterName.trim()) {
-      setError("Roster name is required.");
-      return;
-    }
 
     setIsCreating(true);
     try {
-      const rosterId = await createEmpty({ name: rosterName.trim() });
+      const rosterId = await createEmpty({ name: generateRosterName() });
       router.push(`/rosters/${rosterId}`);
     } catch (createError) {
       setError(createError instanceof Error ? createError.message : "Could not create roster.");
@@ -47,68 +39,29 @@ export default function HomePage() {
     }
   }
 
-  async function handleSeedDemo() {
-    setError(null);
-    setIsSeeding(true);
-    try {
-      const rosterId = await seedDemo({});
-      router.push(`/rosters/${rosterId}`);
-    } catch (seedError) {
-      setError(seedError instanceof Error ? seedError.message : "Could not create demo roster.");
-    } finally {
-      setIsSeeding(false);
-    }
-  }
-
   return (
-    <PageShell
-      title="Tapcheck"
-      subtitle="Mobile-first realtime attendance for teachers taking attendance at the classroom door."
-    >
-      <section className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
+    <PageShell title="Tapcheck" subtitle="Mobile-first attendance taking">
+      <section className="space-y-4">
         <div className="rounded-[28px] border border-white/70 bg-white/90 p-5 shadow-sm">
-          <h2 className="text-lg font-semibold tracking-tight text-slate-950">Create roster</h2>
-          <form onSubmit={handleCreateEmpty} className="mt-4 space-y-4">
-            <label className="block">
-              <span className="mb-2 block text-sm font-medium text-slate-700">Roster name</span>
-              <input
-                value={rosterName}
-                onChange={(event) => setRosterName(event.target.value)}
-                placeholder="Period 2 Science"
-                className="h-12 w-full rounded-2xl border border-slate-300 bg-white px-4 text-base text-slate-950 outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
-              />
-            </label>
-            <button
-              type="submit"
-              disabled={isCreating}
-              className="inline-flex h-12 items-center justify-center rounded-full bg-slate-950 px-5 text-sm font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
-            >
-              {isCreating ? "Creating..." : "Create empty roster"}
-            </button>
-          </form>
-        </div>
-
-        <div className="rounded-[28px] border border-white/70 bg-white/90 p-5 shadow-sm">
-          <h2 className="text-lg font-semibold tracking-tight text-slate-950">Quick start</h2>
+          <h2 className="font-heading text-lg font-semibold tracking-tight text-slate-950">
+            Create a New Roster
+          </h2>
           <div className="mt-4 flex flex-col gap-3">
             <Link
               href="/rosters/import"
-              className="inline-flex h-12 items-center justify-center rounded-full bg-emerald-600 px-5 text-sm font-medium text-white transition hover:bg-emerald-500"
+              className="inline-flex h-14 items-center justify-center rounded-full bg-emerald-600 px-6 text-base font-semibold text-white transition hover:bg-emerald-500"
             >
               Import SchoolCash CSV
             </Link>
             <button
               type="button"
-              onClick={() => void handleSeedDemo()}
-              disabled={isSeeding}
-              className="inline-flex h-12 items-center justify-center rounded-full border border-slate-300 px-5 text-sm font-medium text-slate-700 transition hover:border-slate-400 hover:text-slate-950 disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-400"
+              onClick={() => void handleCreateEmpty()}
+              disabled={isCreating}
+              className="inline-flex h-14 items-center justify-center rounded-full bg-slate-950 px-6 text-base font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
             >
-              {isSeeding ? "Creating demo..." : "Seed demo roster"}
+              {isCreating ? "Creating..." : "Create empty roster"}
             </button>
           </div>
-          <p className="mt-4 text-sm leading-6 text-slate-600">
-            CSV import includes column mapping and duplicate student ID warnings before anything is saved.
-          </p>
         </div>
       </section>
 
@@ -121,8 +74,9 @@ export default function HomePage() {
       <section className="rounded-[28px] border border-white/70 bg-white/90 p-5 shadow-sm">
         <div className="flex items-center justify-between gap-4">
           <div>
-            <h2 className="text-lg font-semibold tracking-tight text-slate-950">Rosters</h2>
-            <p className="mt-1 text-sm text-slate-600">Choose a roster to start a live session or review imported students.</p>
+            <h2 className="font-heading text-lg font-semibold tracking-tight text-slate-950">
+              Manage a Roster
+            </h2>
           </div>
         </div>
 
