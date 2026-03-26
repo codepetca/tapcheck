@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, User } from "lucide-react";
+import { Check, Play, Square, User } from "lucide-react";
 import Papa from "papaparse";
 import { useMutation, useQuery } from "convex/react";
 import Link from "next/link";
@@ -319,6 +319,7 @@ export default function RosterDetailPage({
                 disabled={isStoppingSession}
                 className="inline-flex h-11 items-center justify-center rounded-full bg-slate-950 px-4 text-sm font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
               >
+                <Square className="mr-2 h-4 w-4" />
                 {isStoppingSession ? "Stopping..." : "Stop session"}
               </button>
             ) : (
@@ -330,6 +331,7 @@ export default function RosterDetailPage({
                 disabled={isStartingSession || !hasStudents}
                 className="inline-flex h-11 items-center justify-center rounded-full bg-slate-950 px-4 text-sm font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
               >
+                <Play className="mr-2 h-4 w-4 fill-current" />
                 {isStartingSession
                   ? latestSession
                     ? "Resuming..."

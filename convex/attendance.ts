@@ -13,14 +13,8 @@ async function loadEditorSessionSnapshot(ctx: QueryCtx, token: string) {
     return null;
   }
 
-  const [roster, students, attendanceRecords] = await Promise.all([
+  const [roster, attendanceRecords] = await Promise.all([
     ctx.db.get(session.rosterId),
-    ctx.db
-      .query("students")
-      .withIndex("by_rosterId_active_sortKey", (q) =>
-        q.eq("rosterId", session.rosterId).eq("active", true),
-      )
-      .collect(),
     ctx.db
       .query("attendance")
       .withIndex("by_sessionId", (q) => q.eq("sessionId", session._id))
@@ -31,23 +25,23 @@ async function loadEditorSessionSnapshot(ctx: QueryCtx, token: string) {
     return null;
   }
 
-  const attendanceByStudent = new Map(
-    attendanceRecords.map((record) => [record.studentRef, record] as const),
+  const students = await Promise.all(
+    attendanceRecords.map((record) => ctx.db.get(record.studentRef)),
   );
 
-  const studentsWithAttendance = students.map((student) => {
-    const attendance = attendanceByStudent.get(student._id);
+  const studentsWithAttendance = attendanceRecords.map((attendance, index) => {
+    const student = students[index];
     return {
-      studentRef: student._id,
-      studentId: student.studentId,
-      rawName: student.rawName,
-      displayName: student.displayName,
-      firstName: student.firstName,
-      lastName: student.lastName,
-      present: attendance?.present ?? false,
-      markedAt: attendance?.markedAt,
-      modifiedAt: attendance?.modifiedAt ?? session.createdAt,
-      lastModifiedAt: attendance?.lastModifiedAt,
+      studentRef: attendance.studentRef,
+      studentId: attendance.studentId,
+      rawName: student?.rawName ?? "",
+      displayName: student?.displayName ?? attendance.studentId,
+      firstName: student?.firstName ?? "",
+      lastName: student?.lastName ?? "",
+      present: attendance.present,
+      markedAt: attendance.markedAt,
+      modifiedAt: attendance.modifiedAt,
+      lastModifiedAt: attendance.lastModifiedAt,
     };
   });
 

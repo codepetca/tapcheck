@@ -247,6 +247,7 @@ export const importIntoExisting = mutation({
     rosterId: v.id("rosters"),
     name: v.string(),
     students: v.array(importedStudentValidator),
+    deactivateMissing: v.optional(v.boolean()),
   },
   returns: v.id("rosters"),
   handler: async (ctx, args) => {
@@ -269,10 +270,12 @@ export const importIntoExisting = mutation({
 
     await ctx.db.patch(args.rosterId, { name });
 
-    const incomingIds = new Set(args.students.map((student) => student.studentId));
-    for (const existingStudent of existingStudents) {
-      if (!incomingIds.has(existingStudent.studentId) && existingStudent.active) {
-        await ctx.db.patch(existingStudent._id, { active: false });
+    if (args.deactivateMissing) {
+      const incomingIds = new Set(args.students.map((student) => student.studentId));
+      for (const existingStudent of existingStudents) {
+        if (!incomingIds.has(existingStudent.studentId) && existingStudent.active) {
+          await ctx.db.patch(existingStudent._id, { active: false });
+        }
       }
     }
 

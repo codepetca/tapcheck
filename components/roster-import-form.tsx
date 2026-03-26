@@ -78,6 +78,12 @@ export function RosterImportForm() {
   const hasImportData = rows.length > 0;
   const isEditingExistingRoster = Boolean(existingRosterId);
   const existingRosterName = existingRoster?.roster.name ?? "";
+  const importedStudentIds = new Set(preview.validStudents.map((student) => student.studentId));
+  const omittedStudents =
+    isEditingExistingRoster && existingRoster
+      ? existingRoster.students.filter((student) => !importedStudentIds.has(student.studentId))
+      : [];
+  const [deactivateMissing, setDeactivateMissing] = useState(false);
 
   useEffect(() => {
     if (rosterNameTouched) {
@@ -89,6 +95,12 @@ export function RosterImportForm() {
       setRosterName(nextName);
     }
   }, [existingRosterName, preview.inferredRosterName, rosterName, rosterNameTouched]);
+
+  useEffect(() => {
+    if (omittedStudents.length === 0 && deactivateMissing) {
+      setDeactivateMissing(false);
+    }
+  }, [deactivateMissing, omittedStudents.length]);
 
   function applyMapping(nextMapping: ColumnMapping, nextRows = rows) {
     setMapping(nextMapping);
@@ -209,7 +221,7 @@ export function RosterImportForm() {
     }
 
     if (rows.length === 0) {
-      setSubmitError("Upload a CSV before importing.");
+      setSubmitError("Upload a CSV or paste students before importing.");
       return;
     }
 
@@ -225,6 +237,7 @@ export function RosterImportForm() {
             rosterId: existingRosterId,
             name: rosterName.trim(),
             students: preview.validStudents,
+            deactivateMissing,
           })
         : await importCsv({
             name: rosterName.trim(),
@@ -397,6 +410,23 @@ export function RosterImportForm() {
                   <p key={warning}>{warning}</p>
                 ))}
               </div>
+            ) : null}
+
+            {omittedStudents.length > 0 ? (
+              <label className="mt-3 block rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                <span className="flex items-start gap-3">
+                  <input
+                    type="checkbox"
+                    checked={deactivateMissing}
+                    onChange={(event) => setDeactivateMissing(event.target.checked)}
+                    className="mt-0.5 h-4 w-4 accent-amber-700"
+                  />
+                  <span>
+                    Deactivate {omittedStudents.length} student
+                    {omittedStudents.length === 1 ? "" : "s"} not included in this import
+                  </span>
+                </span>
+              </label>
             ) : null}
 
             <div className="mt-6 flex items-center justify-between gap-4">

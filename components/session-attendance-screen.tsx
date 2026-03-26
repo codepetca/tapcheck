@@ -1,6 +1,7 @@
 "use client";
 
 import { useMutation, useQuery } from "convex/react";
+import { ChevronDown, Search, SlidersHorizontal } from "lucide-react";
 import Link from "next/link";
 import { useDeferredValue, useState } from "react";
 import { api } from "@/convex/api";
@@ -32,6 +33,7 @@ export function SessionAttendanceScreen({
   const [search, setSearch] = useState("");
   const [hidePresent, setHidePresent] = useState(false);
   const [sortMode, setSortMode] = useState<SortMode>("last");
+  const [showFilters, setShowFilters] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const deferredSearch = useDeferredValue(search.trim().toLocaleLowerCase());
 
@@ -169,12 +171,15 @@ export function SessionAttendanceScreen({
     <main className="mx-auto flex min-h-screen w-full max-w-3xl flex-col px-3 py-3 sm:px-6">
       <div className="rounded-[30px] border border-emerald-100 bg-[linear-gradient(180deg,#ffffff_0%,#f2fbf7_100%)] px-5 py-5 shadow-sm ring-1 ring-slate-950/5">
         <div className="flex items-start justify-between gap-4">
-          <h1 className="font-heading text-2xl font-semibold tracking-tight text-slate-950">
+          <h1 className="font-heading min-w-0 text-2xl font-semibold tracking-tight text-slate-950">
             {session.session.title}
           </h1>
-          <div className="rounded-2xl bg-slate-950 px-4 py-3 text-right text-white shadow-sm">
-            <div className="text-2xl font-semibold leading-none">
-              {session.presentCount} / {session.totalCount}
+          <div className="shrink-0 rounded-2xl bg-slate-950 px-3 py-3 text-white shadow-sm">
+            <div className="flex items-center gap-2 whitespace-nowrap">
+              <span className="text-2xl font-semibold leading-none">{session.presentCount}</span>
+              <span className="px-1 text-sm font-medium leading-none text-slate-300">
+                {session.totalCount}
+              </span>
             </div>
           </div>
         </div>
@@ -186,51 +191,66 @@ export function SessionAttendanceScreen({
       </div>
 
       <div className="sticky top-0 z-10 mt-4 rounded-[28px] border border-white/70 bg-white/90 px-4 py-4 shadow-sm backdrop-blur">
-        <label className="block">
-          <span className="mb-2 block text-sm font-medium text-slate-700">Search</span>
+        <div className="relative">
+          <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
           <input
             value={search}
             onChange={(event) => setSearch(event.target.value)}
             placeholder="Search name or student ID"
-            className="h-12 w-full rounded-2xl border border-slate-300 bg-white px-4 text-base text-slate-950 outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
+            className="h-12 w-full rounded-2xl border border-slate-300 bg-white pl-11 pr-4 text-base text-slate-950 outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
           />
-        </label>
-        <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-slate-500">Sort</span>
-            <div className="flex rounded-full border border-slate-200 bg-slate-50 p-1">
-              {(
-                [
-                  { value: "last", label: "Last" },
-                  { value: "first", label: "First" },
-                  { value: "id", label: "ID" },
-                ] as const
-              ).map((option) => (
-                <button
-                  key={option.value}
-                  type="button"
-                  onClick={() => setSortMode(option.value)}
-                  className={`rounded-full px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.12em] transition ${
-                    sortMode === option.value
-                      ? "bg-white text-slate-950 shadow-sm"
-                      : "text-slate-500"
-                  }`}
-                >
-                  {option.label}
-                </button>
-              ))}
-            </div>
-          </div>
-          <label className="flex items-center gap-2 text-sm text-slate-700">
-            <input
-              type="checkbox"
-              checked={hidePresent}
-              onChange={(event) => setHidePresent(event.target.checked)}
-              className="h-5 w-5 accent-emerald-600"
-            />
-            <span>Hide marked</span>
-          </label>
         </div>
+        <div className="mt-3">
+          <button
+            type="button"
+            onClick={() => setShowFilters((current) => !current)}
+            className="inline-flex h-10 items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-4 text-sm font-medium text-slate-700 transition hover:border-slate-300 hover:text-slate-950"
+          >
+            <SlidersHorizontal className="h-4 w-4" />
+            Options
+            <ChevronDown
+              className={`h-4 w-4 transition ${showFilters ? "rotate-180" : ""}`}
+            />
+          </button>
+        </div>
+        {showFilters ? (
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 pt-3">
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-slate-500">Sort</span>
+              <div className="flex rounded-full border border-slate-200 bg-slate-50 p-1">
+                {(
+                  [
+                    { value: "last", label: "Last" },
+                    { value: "first", label: "First" },
+                    { value: "id", label: "ID" },
+                  ] as const
+                ).map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => setSortMode(option.value)}
+                    className={`rounded-full px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.12em] transition ${
+                      sortMode === option.value
+                        ? "bg-white text-slate-950 shadow-sm"
+                        : "text-slate-500"
+                    }`}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <label className="flex items-center gap-2 text-sm text-slate-700">
+              <input
+                type="checkbox"
+                checked={hidePresent}
+                onChange={(event) => setHidePresent(event.target.checked)}
+                className="h-5 w-5 accent-emerald-600"
+              />
+              <span>Hide marked</span>
+            </label>
+          </div>
+        ) : null}
       </div>
 
       <section className="mt-4">
@@ -240,7 +260,7 @@ export function SessionAttendanceScreen({
           </h2>
           <span className="text-sm text-slate-500">{notYetMarked.length}</span>
         </div>
-        <div className="space-y-3">
+        <div className="space-y-1.5">
           {notYetMarked.length === 0 ? (
             <div className="rounded-[24px] border border-dashed border-slate-300 bg-white/80 px-4 py-6 text-center text-sm text-slate-500">
               No students in this section.
@@ -251,7 +271,7 @@ export function SessionAttendanceScreen({
               key={student.studentRef}
               type="button"
               onClick={() => void handleToggle(student.studentRef)}
-              className="flex min-h-16 w-full items-center rounded-[24px] border border-slate-200 bg-white px-4 py-4 text-left shadow-sm transition hover:border-emerald-300 hover:bg-emerald-50/60 active:scale-[0.99]"
+              className="flex min-h-13 w-full items-center rounded-[20px] border border-slate-200 bg-white px-4 py-3 text-left shadow-sm transition hover:border-emerald-300 hover:bg-emerald-50/60 active:scale-[0.99]"
             >
               <div>
                 <div className="text-base font-semibold text-slate-950">
@@ -272,7 +292,7 @@ export function SessionAttendanceScreen({
             </h2>
             <span className="text-sm text-slate-500">{presentStudents.length}</span>
           </div>
-          <div className="space-y-3">
+          <div className="space-y-1.5">
             {presentStudents.length === 0 ? (
               <div className="rounded-[24px] border border-dashed border-slate-300 bg-white/80 px-4 py-6 text-center text-sm text-slate-500">
                 No students marked present yet.
@@ -283,7 +303,7 @@ export function SessionAttendanceScreen({
                 key={student.studentRef}
                 type="button"
                 onClick={() => void handleToggle(student.studentRef)}
-                className="flex min-h-16 w-full items-center rounded-[24px] border border-emerald-200 bg-emerald-50 px-4 py-4 text-left shadow-sm transition hover:border-emerald-300 hover:bg-emerald-100/70 active:scale-[0.99]"
+                className="flex min-h-13 w-full items-center rounded-[20px] border border-emerald-200 bg-emerald-50 px-4 py-3 text-left shadow-sm transition hover:border-emerald-300 hover:bg-emerald-100/70 active:scale-[0.99]"
               >
                 <div>
                   <div className="text-base font-semibold text-slate-950">
