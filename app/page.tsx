@@ -4,7 +4,6 @@ import { useMutation, useQuery } from "convex/react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { EmptyState } from "@/components/empty-state";
 import { PageShell } from "@/components/page-shell";
 import { api } from "@/convex/api";
 import { generateRosterName } from "@/lib/roster-names";
@@ -71,25 +70,16 @@ export default function HomePage() {
         </p>
       ) : null}
 
-      <section className="rounded-[28px] border border-white/70 bg-white/90 p-5 shadow-sm">
-        <div className="flex items-center justify-between gap-4">
-          <div>
-            <h2 className="font-heading text-lg font-semibold tracking-tight text-slate-950">
-              Manage a Roster
-            </h2>
+      {rosters !== undefined && rosters.length > 0 ? (
+        <section className="rounded-[28px] border border-white/70 bg-white/90 p-5 shadow-sm">
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <h2 className="font-heading text-lg font-semibold tracking-tight text-slate-950">
+                Manage a Roster
+              </h2>
+            </div>
           </div>
-        </div>
 
-        {rosters === undefined ? (
-          <div className="mt-4 h-20 animate-pulse rounded-[24px] bg-slate-100" />
-        ) : rosters.length === 0 ? (
-          <div className="mt-4">
-            <EmptyState
-              title="No rosters yet"
-              description="Create an empty roster, import a CSV, or seed the demo class to start testing the attendance flow."
-            />
-          </div>
-        ) : (
           <div className="mt-4 space-y-3">
             {rosters.map((roster) => (
               <Link
@@ -110,8 +100,8 @@ export default function HomePage() {
               </Link>
             ))}
           </div>
-        )}
-      </section>
+        </section>
+      ) : null}
     </PageShell>
   );
 }
