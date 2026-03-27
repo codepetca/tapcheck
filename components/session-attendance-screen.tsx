@@ -3,9 +3,11 @@
 import { useMutation, useQuery } from "convex/react";
 import { Search } from "lucide-react";
 import Link from "next/link";
+import type { Dispatch, SetStateAction } from "react";
 import { useDeferredValue, useState } from "react";
 import { api } from "@/convex/api";
 import type { Id } from "@/convex/model";
+import { cn } from "@/lib/cn";
 import { getCurrentTimestamp } from "@/lib/time";
 
 type SessionAttendanceScreenProps = {
@@ -13,6 +15,8 @@ type SessionAttendanceScreenProps = {
 };
 
 type SortMode = "last" | "first" | "id";
+
+const ATTENDANCE_TAP_EXIT_MS = 160;
 
 function formatMarkedTime(timestamp?: number) {
   if (!timestamp) {
@@ -34,6 +38,10 @@ export function SessionAttendanceScreen({
   const [search, setSearch] = useState("");
   const [sortMode, setSortMode] = useState<SortMode>("last");
   const [error, setError] = useState<string | null>(null);
+  const [exitingStudentRefs, setExitingStudentRefs] = useState<Set<Id<"students">>>(() => new Set());
+  const [submittingStudentRefs, setSubmittingStudentRefs] = useState<Set<Id<"students">>>(
+    () => new Set(),
+  );
   const deferredSearch = useDeferredValue(search.trim().toLocaleLowerCase());
 
   const toggleAttendance = useMutation(api.attendance.toggleByEditorToken).withOptimisticUpdate(
@@ -150,9 +158,39 @@ export function SessionAttendanceScreen({
     setSortMode(nextSortMode);
   }
 
+  function setStudentTransitionState(
+    studentRef: Id<"students">,
+    setter: Dispatch<SetStateAction<Set<Id<"students">>>>,
+    active: boolean,
+  ) {
+    setter((current) => {
+      const next = new Set(current);
+
+      if (active) {
+        next.add(studentRef);
+      } else {
+        next.delete(studentRef);
+      }
+
+      return next;
+    });
+  }
+
   async function handleToggle(studentRef: Id<"students">) {
+    if (submittingStudentRefs.has(studentRef)) {
+      return;
+    }
+
     setError(null);
+    setStudentTransitionState(studentRef, setSubmittingStudentRefs, true);
+    setStudentTransitionState(studentRef, setExitingStudentRefs, true);
+
     try {
+      await new Promise<void>((resolve) => {
+        window.setTimeout(resolve, ATTENDANCE_TAP_EXIT_MS);
+      });
+
+      setStudentTransitionState(studentRef, setExitingStudentRefs, false);
       await toggleAttendance({
         token,
         studentRef,
@@ -160,6 +198,9 @@ export function SessionAttendanceScreen({
       });
     } catch (toggleError) {
       setError(toggleError instanceof Error ? toggleError.message : "Unable to update attendance.");
+    } finally {
+      setStudentTransitionState(studentRef, setExitingStudentRefs, false);
+      setStudentTransitionState(studentRef, setSubmittingStudentRefs, false);
     }
   }
 
@@ -248,7 +289,12 @@ export function SessionAttendanceScreen({
               key={student.studentRef}
               type="button"
               onClick={() => void handleToggle(student.studentRef)}
-              className="grid min-h-13 w-full items-center gap-3 rounded-[20px] border border-slate-200 bg-white px-4 py-3 text-left shadow-sm transition hover:border-emerald-300 hover:bg-emerald-50/60 active:scale-[0.99]"
+              disabled={submittingStudentRefs.has(student.studentRef)}
+              aria-busy={submittingStudentRefs.has(student.studentRef)}
+              className={cn(
+                "grid min-h-13 w-full items-center gap-3 rounded-[20px] border border-slate-200 bg-white px-4 py-3 text-left shadow-sm transition-[transform,opacity,background-color,border-color] duration-180 ease-out hover:border-emerald-300 hover:bg-emerald-50/60 active:scale-[0.99] disabled:cursor-wait",
+                exitingStudentRefs.has(student.studentRef) && "pointer-events-none translate-y-1 scale-[0.985] opacity-0",
+              )}
               style={{ gridTemplateColumns: studentGridTemplateColumns }}
             >
               <div className="min-w-0 text-base font-semibold text-slate-950">
@@ -276,7 +322,12 @@ export function SessionAttendanceScreen({
               key={student.studentRef}
               type="button"
               onClick={() => void handleToggle(student.studentRef)}
-              className="grid min-h-13 w-full items-center gap-3 rounded-[20px] border border-emerald-200 bg-emerald-50 px-4 py-3 text-left shadow-sm transition hover:border-emerald-300 hover:bg-emerald-100/70 active:scale-[0.99]"
+              disabled={submittingStudentRefs.has(student.studentRef)}
+              aria-busy={submittingStudentRefs.has(student.studentRef)}
+              className={cn(
+                "grid min-h-13 w-full items-center gap-3 rounded-[20px] border border-emerald-200 bg-emerald-50 px-4 py-3 text-left shadow-sm transition-[transform,opacity,background-color,border-color] duration-180 ease-out hover:border-emerald-300 hover:bg-emerald-100/70 active:scale-[0.99] disabled:cursor-wait",
+                exitingStudentRefs.has(student.studentRef) && "pointer-events-none translate-y-1 scale-[0.985] opacity-0",
+              )}
               style={{ gridTemplateColumns: studentGridTemplateColumns }}
             >
               <div className="min-w-0 text-base font-semibold text-slate-950">
