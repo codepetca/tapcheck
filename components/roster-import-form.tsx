@@ -78,6 +78,23 @@ function parsePastedStudentList(input: string): CsvRow[] {
   }));
 }
 
+function buildExistingRosterRows(
+  students: Array<{ studentId: string; displayName: string; rawName: string }>,
+): CsvRow[] {
+  return students.map((student) => ({
+    [PASTED_ID_COLUMN]: student.studentId,
+    [PASTED_NAME_COLUMN]: student.displayName || student.rawName,
+  }));
+}
+
+function buildExistingRosterText(
+  students: Array<{ studentId: string; displayName: string; rawName: string }>,
+) {
+  return students
+    .map((student) => `${student.studentId}\t${student.displayName || student.rawName}`)
+    .join("\n");
+}
+
 export function RosterImportForm() {
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -108,6 +125,7 @@ export function RosterImportForm() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [pastedRosterName, setPastedRosterName] = useState(() => generateRosterName());
   const [pendingSourceMode, setPendingSourceMode] = useState<SourceMode | null>(null);
+  const [seededExistingRosterId, setSeededExistingRosterId] = useState<string | null>(null);
 
   const preview = buildImportPreview(rows, mapping);
   const hasImportData = rows.length > 0;
@@ -152,6 +170,46 @@ export function RosterImportForm() {
       setDeactivateMissing(false);
     }
   }, [deactivateMissing, omittedStudents.length]);
+
+  useEffect(() => {
+    if (!isEditingExistingRoster) {
+      setSeededExistingRosterId(null);
+      return;
+    }
+
+    if (!existingRoster || seededExistingRosterId === existingRoster.roster._id) {
+      return;
+    }
+
+    const seededRows = buildExistingRosterRows(existingRoster.students);
+    const seededMapping: ColumnMapping = {
+      studentIdColumn: PASTED_ID_COLUMN,
+      nameColumn: PASTED_NAME_COLUMN,
+      titleColumn: null,
+    };
+
+    setSourceMode("paste");
+    setImportSource("paste");
+    setHeaders([PASTED_ID_COLUMN, PASTED_NAME_COLUMN]);
+    setRows(seededRows);
+    setFileName("");
+    setPastedText(buildExistingRosterText(existingRoster.students));
+    setParseError(null);
+    setSubmitError(null);
+    setMapping(seededMapping);
+    setDeactivateMissing(false);
+
+    if (!rosterNameTouched) {
+      setRosterName(existingRoster.roster.name);
+    }
+
+    setSeededExistingRosterId(existingRoster.roster._id);
+  }, [
+    existingRoster,
+    isEditingExistingRoster,
+    rosterNameTouched,
+    seededExistingRosterId,
+  ]);
 
   function applyMapping(
     nextMapping: ColumnMapping,
@@ -362,6 +420,18 @@ export function RosterImportForm() {
     } finally {
       setIsSubmitting(false);
     }
+  }
+
+  if (isEditingExistingRoster && existingRoster === undefined) {
+    return <div className="h-64 animate-pulse rounded-[28px] border border-white/70 bg-white/90" />;
+  }
+
+  if (isEditingExistingRoster && existingRoster === null) {
+    return (
+      <section className="rounded-[28px] border border-white/70 bg-white/90 px-5 py-8 text-sm text-slate-600 shadow-sm">
+        This roster does not exist.
+      </section>
+    );
   }
 
   return (

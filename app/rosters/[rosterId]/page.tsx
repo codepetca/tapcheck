@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, CircleHelp, Copy, ExternalLink, Pencil, Play, Share, Square, User } from "lucide-react";
+import { Check, CircleHelp, Copy, Pencil, Play, Share, Square, User } from "lucide-react";
 import Papa from "papaparse";
 import { useMutation, useQuery } from "convex/react";
 import Link from "next/link";
@@ -32,6 +32,18 @@ function sanitizeFilePart(value: string) {
     .replace(/^-+|-+$/g, "");
 }
 
+function downloadCsvFile(csv: string, fileName: string) {
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = window.URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.URL.revokeObjectURL(url);
+}
+
 export default function RosterDetailPage({
   params,
 }: {
@@ -61,6 +73,7 @@ export default function RosterDetailPage({
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [isHelpDialogOpen, setIsHelpDialogOpen] = useState(false);
   const [canShareCsvFile, setCanShareCsvFile] = useState(false);
+  const [canShareEditorLink, setCanShareEditorLink] = useState(false);
   const [sortColumn, setSortColumn] = useState<SortColumn>("lastName");
   const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
   const latestSessionId = data && data !== null ? (data.sessions[0]?._id ?? null) : null;
@@ -68,6 +81,21 @@ export default function RosterDetailPage({
     api.attendance.getSessionExport,
     latestSessionId ? { sessionId: latestSessionId } : "skip",
   );
+
+  useEffect(() => {
+    if (typeof navigator === "undefined" || typeof navigator.share !== "function") {
+      setCanShareEditorLink(false);
+      return;
+    }
+
+    const mobileLikeUserAgent = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+    const coarsePointer =
+      typeof window !== "undefined" &&
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(pointer: coarse)").matches;
+
+    setCanShareEditorLink(mobileLikeUserAgent || coarsePointer);
+  }, []);
 
   useEffect(() => {
     if (
@@ -83,7 +111,15 @@ export default function RosterDetailPage({
       type: "text/csv;charset=utf-8;",
     });
 
-    setCanShareCsvFile(navigator.canShare({ files: [probeFile] }));
+    const mobileLikeUserAgent = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+    const coarsePointer =
+      typeof window !== "undefined" &&
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(pointer: coarse)").matches;
+
+    setCanShareCsvFile(
+      (mobileLikeUserAgent || coarsePointer) && navigator.canShare({ files: [probeFile] }),
+    );
   }, []);
 
   if (data === undefined) {
@@ -119,13 +155,18 @@ export default function RosterDetailPage({
       ? "Start"
       : "Add students to start";
   const stopControlLabel = isStoppingSession ? "Stopping" : "Stop";
+  const editorLinkControlLabel = canShareEditorLink
+    ? "Send attendance link"
+    : copiedLink
+      ? "Copied collection link"
+      : "Collection link";
   const exportControlLabel = isExporting
     ? canShareCsvFile
       ? "Opening share sheet"
-      : "Exporting attendance CSV"
+      : "Downloading attendance CSV"
     : canShareCsvFile
       ? "Share attendance CSV"
-      : "Export attendance CSV";
+      : "Download attendance CSV";
   const attendanceByStudentId = new Map(
     sessionExport?.rows.map((row) => [row.studentId, row.present]) ?? [],
   );
@@ -272,8 +313,24 @@ export default function RosterDetailPage({
     }
   }
 
-  async function handleCopyEditorLink() {
+  async function handleEditorLinkAction() {
     if (!editorUrl) {
+      return;
+    }
+
+    if (canShareEditorLink && typeof navigator !== "undefined" && typeof navigator.share === "function") {
+      try {
+        await navigator.share({
+          title: `${roster.name} attendance link`,
+          url: editorUrl,
+        });
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") {
+          return;
+        }
+
+        setSessionError(error instanceof Error ? error.message : "Could not send attendance link.");
+      }
       return;
     }
 
@@ -329,22 +386,39 @@ export default function RosterDetailPage({
         typeof navigator.canShare === "function" &&
         navigator.canShare({ files: [file] })
       ) {
-        await navigator.share({
-          title: fileName,
-          files: [file],
-        });
-        return;
+        try {
+          await navigator.share({
+            title: fileName,
+            files: [file],
+          });
+          return;
+        } catch (error) {
+          if (error instanceof DOMException && error.name === "AbortError") {
+            return;
+          }
+
+          // Some browsers expose file-sharing but reject at runtime. Fall back to a download.
+          if (
+            error instanceof DOMException &&
+            (error.name === "NotAllowedError" || error.name === "SecurityError")
+          ) {
+            downloadCsvFile(csv, fileName);
+            return;
+          }
+
+          if (
+            error instanceof Error &&
+            error.message.toLocaleLowerCase().includes("permission denied")
+          ) {
+            downloadCsvFile(csv, fileName);
+            return;
+          }
+
+          throw error;
+        }
       }
 
-      const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-      const url = window.URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = fileName;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      window.URL.revokeObjectURL(url);
+      downloadCsvFile(csv, fileName);
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") {
         return;
@@ -371,19 +445,21 @@ export default function RosterDetailPage({
 
   return (
     <PageShell
+      headerAction={
+        <button
+          type="button"
+          onClick={() => setIsHelpDialogOpen(true)}
+          aria-label="How attendance sharing works"
+          title="How attendance sharing works"
+          className="inline-flex h-10 w-10 items-center justify-center rounded-full text-slate-500 transition hover:bg-slate-100 hover:text-slate-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+        >
+          <CircleHelp aria-hidden="true" className="h-4 w-4" />
+        </button>
+      }
       title={
-        <div className="relative">
-          <button
-            type="button"
-            onClick={() => setIsHelpDialogOpen(true)}
-            aria-label="How attendance sharing works"
-            title="How attendance sharing works"
-            className="absolute right-0 top-0 inline-flex h-10 w-10 items-center justify-center rounded-full text-slate-500 transition hover:bg-slate-100 hover:text-slate-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
-          >
-            <CircleHelp aria-hidden="true" className="h-4 w-4" />
-          </button>
+        <div>
           {isEditingTitle ? (
-            <div className="space-y-3 pr-12">
+            <div className="space-y-3">
               <input
                 autoFocus
                 value={draftTitle}
@@ -424,7 +500,7 @@ export default function RosterDetailPage({
               {titleError ? <p className="text-sm text-rose-700">{titleError}</p> : null}
             </div>
           ) : (
-            <div className="pr-12">
+            <div>
               <button
                 type="button"
                 onClick={() => {
@@ -445,7 +521,7 @@ export default function RosterDetailPage({
       <ConfirmDialog
         open={isStopDialogOpen}
         title="Stop Session?"
-        description="The session will stop now, but you can resume it later with the same link."
+        description="You can resume it later."
         confirmLabel="Stop session"
         tone="danger"
         busy={isStoppingSession}
@@ -472,10 +548,10 @@ export default function RosterDetailPage({
               1. Tap <span className="font-semibold text-slate-950">Start</span> to open the attendance session.
             </p>
             <p>
-              2. Tap <span className="font-semibold text-slate-950">Copy link</span> or <span className="font-semibold text-slate-950">Open</span>, then send that link to the attendance taker.
+              2. On mobile, tap <span className="font-semibold text-slate-950">Send link</span>. On desktop, use <span className="font-semibold text-slate-950">Collection Link</span>, then send that link to the attendance taker.
             </p>
             <p>
-              3. When attendance is finished, tap <span className="font-semibold text-slate-950">Stop</span> and use <span className="font-semibold text-slate-950">Share Attendance</span> to send the CSV.
+              3. When attendance is finished, tap <span className="font-semibold text-slate-950">Stop</span> and use <span className="font-semibold text-slate-950">Send Attendance</span> to send the CSV.
             </p>
           </div>
           <div className="mt-6">
@@ -489,68 +565,53 @@ export default function RosterDetailPage({
           </div>
         </Card>
       </Dialog>
-      <section
-        className={`rounded-[24px] border p-5 shadow-sm transition ${
-          activeSession
-            ? "border-emerald-200 bg-emerald-100/80"
-            : "border-white/70 bg-white/90"
-        }`}
-      >
-        <div className="flex flex-col items-center gap-3 text-center">
+      <section className="space-y-3">
+        <div className="space-y-3">
           {activeSession ? (
-            <div className="flex flex-wrap items-center justify-center gap-3">
+            <div className="grid w-full grid-cols-2 gap-3">
               <button
                 type="button"
                 onClick={() => setIsStopDialogOpen(true)}
                 disabled={isStoppingSession}
                 aria-label={stopControlLabel}
                 title={stopControlLabel}
-                className="inline-flex h-11 items-center justify-center gap-2 rounded-full bg-rose-600 px-5 text-sm font-medium text-white transition hover:bg-rose-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-400 disabled:cursor-not-allowed disabled:bg-rose-200"
+                className="inline-flex h-[68px] w-full items-center justify-center gap-2 rounded-full bg-rose-600 px-4 sm:px-5 text-sm font-medium text-white transition hover:bg-rose-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-400 disabled:cursor-not-allowed disabled:bg-rose-200"
               >
                 <Square className="h-4 w-4" />
-                <span>{stopControlLabel}</span>
+                <span className="hidden sm:inline">{stopControlLabel}</span>
               </button>
 
               <button
                 type="button"
-                onClick={() => void handleCopyEditorLink()}
-                aria-label={copiedLink ? "Copied editor link" : "Copy editor link"}
-                title={copiedLink ? "Copied editor link" : "Copy editor link"}
-                className="inline-flex h-11 items-center justify-center gap-2 rounded-full border border-emerald-200 bg-white/90 px-4 text-sm font-medium text-emerald-950 transition hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+                onClick={() => void handleEditorLinkAction()}
+                aria-label={editorLinkControlLabel}
+                title={editorLinkControlLabel}
+                className="inline-flex h-[68px] w-full items-center justify-center gap-2 rounded-full border border-emerald-200 bg-white/90 px-4 text-sm font-medium text-emerald-950 transition hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
               >
-                {copiedLink ? (
+                {canShareEditorLink ? (
+                  <Share aria-hidden="true" className="h-4 w-4" />
+                ) : copiedLink ? (
                   <Check aria-hidden="true" className="h-4 w-4 text-emerald-700" />
                 ) : (
                   <Copy aria-hidden="true" className="h-4 w-4" />
                 )}
-                <span>{copiedLink ? "Copied link" : "Copy link"}</span>
+                <span className="hidden sm:inline">{canShareEditorLink ? "Send link" : copiedLink ? "Copied" : "Collection Link"}</span>
               </button>
-
-              <Link
-                href={editorPath}
-                target="_blank"
-                className="inline-flex h-11 items-center justify-center gap-2 rounded-full border border-emerald-200 bg-white/90 px-4 text-sm font-medium text-emerald-950 transition hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
-              >
-                <ExternalLink aria-hidden="true" className="h-4 w-4" />
-                <span>Open</span>
-              </Link>
             </div>
           ) : (
-            <div className="flex flex-wrap items-center justify-center gap-3">
-              <button
-                type="button"
-                onClick={() =>
-                  void (latestSession ? handleResumeSession() : handleStartSession())
-                }
-                disabled={isStartingSession || !hasStudents}
-                aria-label={startControlLabel}
-                title={startControlLabel}
-                className="inline-flex h-11 items-center justify-center gap-2 rounded-full bg-emerald-600 px-5 text-sm font-medium text-white transition hover:bg-emerald-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 disabled:cursor-not-allowed disabled:bg-emerald-200"
-              >
-                <Play className="h-4 w-4 fill-current" />
-                <span>{startControlLabel}</span>
-              </button>
-            </div>
+            <button
+              type="button"
+              onClick={() =>
+                void (latestSession ? handleResumeSession() : handleStartSession())
+              }
+              disabled={isStartingSession || !hasStudents}
+              aria-label={startControlLabel}
+              title={startControlLabel}
+              className="inline-flex h-[68px] w-full items-center justify-center gap-2 rounded-full bg-emerald-600 px-4 sm:px-5 text-sm font-medium text-white transition hover:bg-emerald-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 disabled:cursor-not-allowed disabled:bg-emerald-200"
+            >
+              <Play className="h-4 w-4 fill-current" />
+              <span className="hidden sm:inline">{startControlLabel}</span>
+            </button>
           )}
 
           {sessionError ? (
@@ -566,15 +627,9 @@ export default function RosterDetailPage({
       <section className="overflow-hidden rounded-[28px] border border-white/70 bg-white/90 shadow-sm">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-5 py-4">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="inline-flex items-center gap-2 rounded-full bg-slate-100 px-3 py-1.5 text-sm font-semibold text-slate-700">
+            <span className="inline-flex items-center gap-2 text-sm font-semibold text-slate-700">
               <span>{data.students.length}</span>
               <User aria-hidden="true" className="h-4 w-4" />
-            </span>
-            <span className="inline-flex items-center rounded-full bg-emerald-100 px-3 py-1.5 text-sm font-semibold text-emerald-800">
-              {presentCount} Present
-            </span>
-            <span className="inline-flex items-center rounded-full bg-rose-100 px-3 py-1.5 text-sm font-semibold text-rose-700">
-              {absentCount} Absent
             </span>
           </div>
           <div className="flex flex-wrap gap-3">
@@ -588,16 +643,20 @@ export default function RosterDetailPage({
                 className="inline-flex h-11 items-center justify-center gap-2 rounded-full border border-slate-300 bg-white px-4 text-sm font-medium text-slate-700 transition hover:border-slate-400 hover:text-slate-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-400"
               >
                 <Share aria-hidden="true" className="h-4 w-4" />
-                <span>Share Attendance</span>
+                <span className="hidden sm:inline">
+                  {canShareCsvFile ? "Send Attendance" : "Download Attendance"}
+                </span>
               </button>
             ) : null}
 
             <Link
               href={`/rosters/import?rosterId=${roster._id}`}
+              aria-label="Edit roster"
+              title="Edit roster"
               className="inline-flex h-11 items-center justify-center gap-2 rounded-full border border-slate-300 px-4 text-sm font-medium text-slate-700 transition hover:border-slate-400 hover:text-slate-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
             >
               <Pencil aria-hidden="true" className="h-4 w-4" />
-              <span>Roster</span>
+              <span className="hidden sm:inline">Edit Roster</span>
             </Link>
           </div>
         </div>
@@ -637,9 +696,15 @@ export default function RosterDetailPage({
                   <button
                     type="button"
                     onClick={() => toggleSort("status")}
-                    className="transition hover:text-slate-950"
+                    className="inline-flex items-center gap-2 transition hover:text-slate-950"
                   >
                     Status{sortIndicator("status")}
+                    <span className="inline-flex min-w-6 items-center justify-center rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-800">
+                      {presentCount}
+                    </span>
+                    <span className="inline-flex min-w-6 items-center justify-center rounded-full bg-rose-100 px-2 py-0.5 text-xs font-semibold text-rose-700">
+                      {absentCount}
+                    </span>
                   </button>
                 </th>
               </tr>
@@ -672,17 +737,15 @@ export default function RosterDetailPage({
         </div>
       </section>
 
-      <section className="rounded-[28px] border border-rose-200 bg-rose-50/80 p-5 shadow-sm">
-        <div className="flex justify-center">
-          <button
-            type="button"
-            onClick={() => setIsDeleteDialogOpen(true)}
-            disabled={isDeletingRoster}
-            className="inline-flex h-11 items-center justify-center rounded-full border border-rose-300 bg-white px-4 text-sm font-medium text-rose-700 transition hover:border-rose-400 hover:text-rose-800 disabled:cursor-not-allowed disabled:border-rose-200 disabled:text-rose-300"
-          >
-            {isDeletingRoster ? "Deleting..." : "Delete roster"}
-          </button>
-        </div>
+      <section>
+        <button
+          type="button"
+          onClick={() => setIsDeleteDialogOpen(true)}
+          disabled={isDeletingRoster}
+          className="inline-flex h-11 w-full items-center justify-center rounded-full border border-rose-300 bg-white px-4 text-sm font-medium text-rose-700 transition hover:border-rose-400 hover:text-rose-800 disabled:cursor-not-allowed disabled:border-rose-200 disabled:text-rose-300"
+        >
+          {isDeletingRoster ? "Deleting..." : "Delete roster"}
+        </button>
       </section>
 
     </PageShell>

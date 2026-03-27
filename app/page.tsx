@@ -45,29 +45,25 @@ export default function HomePage() {
                 const sessionStatus =
                   roster.hasActiveSession === true
                     ? {
-                        label: "Session running",
+                        label: "Active",
                         className: "bg-emerald-100 text-emerald-800",
                       }
-                    : roster.hasActiveSession === false
-                      ? {
-                          label: "No active session",
-                          className: "bg-slate-200 text-slate-600",
-                        }
                       : roster.sessionCount > 0
                         ? {
                             label: "Session status syncing",
                             className: "bg-amber-100 text-amber-800",
                           }
-                        : {
-                            label: "No active session",
-                            className: "bg-slate-200 text-slate-600",
-                          };
+                        : null;
 
                 return (
                   <Link
                     key={roster._id}
                     href={`/rosters/${roster._id}`}
-                    className="block rounded-[24px] border border-slate-200 bg-slate-50/90 px-4 py-4 transition hover:border-emerald-300 hover:bg-emerald-50/60"
+                    className={`block rounded-[24px] px-4 py-4 transition ${
+                      roster.hasActiveSession
+                        ? "border border-emerald-200 bg-emerald-100/80 hover:bg-emerald-100"
+                        : "border border-slate-200 bg-slate-50/90 hover:border-emerald-300 hover:bg-emerald-50/60"
+                    }`}
                   >
                     <div className="flex items-start justify-between gap-4">
                       <div>
@@ -76,13 +72,15 @@ export default function HomePage() {
                       </div>
                       <div className="text-right text-sm text-slate-500">
                         <div>{roster.studentCount} students</div>
-                        <div className="mt-1">
-                          <span
-                            className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${sessionStatus.className}`}
-                          >
-                            {sessionStatus.label}
-                          </span>
-                        </div>
+                        {sessionStatus ? (
+                          <div className="mt-1">
+                            <span
+                              className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${sessionStatus.className}`}
+                            >
+                              {sessionStatus.label}
+                            </span>
+                          </div>
+                        ) : null}
                       </div>
                     </div>
                   </Link>

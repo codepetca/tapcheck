@@ -8,6 +8,7 @@ type PageShellProps = {
   subtitle?: string;
   backHref?: string;
   backLabel?: string;
+  headerAction?: React.ReactNode;
   children: React.ReactNode;
 };
 
@@ -16,6 +17,7 @@ export function PageShell({
   subtitle,
   backHref,
   backLabel = "Back",
+  headerAction,
   children,
 }: PageShellProps) {
   return (
@@ -29,14 +31,23 @@ export function PageShell({
                 variant: "outline",
                 size: "sm",
                 className:
-                  "absolute left-0 top-1/2 -translate-y-1/2 shrink-0 border-slate-200 px-3 text-slate-600 hover:text-slate-900",
+                  "absolute -left-2 top-1/2 -translate-y-1/2 shrink-0 border-transparent shadow-none px-3 text-slate-600 hover:text-slate-900",
               })}
             >
               <ChevronLeft aria-hidden="true" className="mr-1 h-4 w-4" />
               {backLabel}
             </Link>
           ) : null}
-          <div className="px-20 text-center">
+          {headerAction ? (
+            <div className="absolute right-0 top-1/2 -translate-y-1/2">
+              {headerAction}
+            </div>
+          ) : null}
+          <div
+            className={`px-20 text-center ${
+              subtitle ? "" : "flex min-h-11 items-center justify-center"
+            }`}
+          >
             <h1 className="font-heading text-xl font-semibold tracking-tight text-slate-950">
               {title}
             </h1>
