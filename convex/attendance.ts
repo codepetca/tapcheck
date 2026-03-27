@@ -3,6 +3,93 @@ import type { Id } from "./model";
 import type { QueryCtx } from "./server";
 import { query, mutation } from "./server";
 
+async function loadActiveRosterStudents(ctx: QueryCtx, rosterId: Id<"rosters">) {
+  return ctx.db
+    .query("students")
+    .withIndex("by_rosterId_active_sortKey", (q) => q.eq("rosterId", rosterId).eq("active", true))
+    .collect();
+}
+
+type SessionStudentRow = {
+  studentRef: Id<"students">;
+  studentId: string;
+  rawName: string;
+  displayName: string;
+  firstName: string;
+  lastName: string;
+  sortKey: string;
+  present: boolean;
+  markedAt: number | undefined;
+  modifiedAt: number;
+  lastModifiedAt: number | undefined;
+};
+
+async function loadOpenSessionStudents(
+  ctx: QueryCtx,
+  args: {
+    rosterId: Id<"rosters">;
+    createdAt: number;
+    attendanceRecords: Array<{
+      _id: Id<"attendance">;
+      studentRef: Id<"students">;
+      studentId: string;
+      present: boolean;
+      markedAt?: number;
+      modifiedAt: number;
+      lastModifiedAt?: number;
+    }>;
+  },
+) {
+  const [attendanceStudents, activeStudents] = await Promise.all([
+    Promise.all(args.attendanceRecords.map((record) => ctx.db.get(record.studentRef))),
+    loadActiveRosterStudents(ctx, args.rosterId),
+  ]);
+
+  const studentsByRef = new Map<Id<"students">, SessionStudentRow>();
+
+  for (const [index, record] of args.attendanceRecords.entries()) {
+    const student = attendanceStudents[index];
+
+    studentsByRef.set(record.studentRef, {
+      studentRef: record.studentRef,
+      studentId: record.studentId,
+      rawName: student?.rawName ?? "",
+      displayName: student?.displayName ?? student?.rawName ?? record.studentId,
+      firstName: student?.firstName ?? "",
+      lastName: student?.lastName ?? "",
+      sortKey: student?.sortKey ?? `${record.studentId}`,
+      present: record.present,
+      markedAt: record.markedAt,
+      modifiedAt: record.modifiedAt,
+      lastModifiedAt: record.lastModifiedAt,
+    });
+  }
+
+  for (const student of activeStudents) {
+    if (studentsByRef.has(student._id)) {
+      continue;
+    }
+
+    studentsByRef.set(student._id, {
+      studentRef: student._id,
+      studentId: student.studentId,
+      rawName: student.rawName,
+      displayName: student.displayName || student.rawName || student.studentId,
+      firstName: student.firstName,
+      lastName: student.lastName,
+      sortKey: student.sortKey,
+      present: false,
+      markedAt: undefined,
+      modifiedAt: args.createdAt,
+      lastModifiedAt: undefined,
+    });
+  }
+
+  const students = [...studentsByRef.values()];
+  students.sort((left, right) => left.sortKey.localeCompare(right.sortKey));
+  return students;
+}
+
 async function loadEditorSessionSnapshot(ctx: QueryCtx, token: string) {
   const session = await ctx.db
     .query("sessions")
@@ -25,24 +112,10 @@ async function loadEditorSessionSnapshot(ctx: QueryCtx, token: string) {
     return null;
   }
 
-  const students = await Promise.all(
-    attendanceRecords.map((record) => ctx.db.get(record.studentRef)),
-  );
-
-  const studentsWithAttendance = attendanceRecords.map((attendance, index) => {
-    const student = students[index];
-    return {
-      studentRef: attendance.studentRef,
-      studentId: attendance.studentId,
-      rawName: student?.rawName ?? "",
-      displayName: student?.displayName ?? attendance.studentId,
-      firstName: student?.firstName ?? "",
-      lastName: student?.lastName ?? "",
-      present: attendance.present,
-      markedAt: attendance.markedAt,
-      modifiedAt: attendance.modifiedAt,
-      lastModifiedAt: attendance.lastModifiedAt,
-    };
+  const studentsWithAttendance = await loadOpenSessionStudents(ctx, {
+    rosterId: session.rosterId,
+    createdAt: session.createdAt,
+    attendanceRecords,
   });
 
   return {
@@ -58,7 +131,18 @@ async function loadEditorSessionSnapshot(ctx: QueryCtx, token: string) {
     },
     totalCount: studentsWithAttendance.length,
     presentCount: studentsWithAttendance.filter((student) => student.present).length,
-    students: studentsWithAttendance,
+    students: studentsWithAttendance.map((student) => ({
+      studentRef: student.studentRef,
+      studentId: student.studentId,
+      rawName: student.rawName,
+      displayName: student.displayName,
+      firstName: student.firstName,
+      lastName: student.lastName,
+      present: student.present,
+      markedAt: student.markedAt,
+      modifiedAt: student.modifiedAt,
+      lastModifiedAt: student.lastModifiedAt,
+    })),
   };
 }
 
@@ -78,24 +162,31 @@ async function loadSessionExport(ctx: QueryCtx, sessionId: Id<"sessions">) {
     .withIndex("by_sessionId", (q) => q.eq("sessionId", sessionId))
     .collect();
 
-  const rows = await Promise.all(
-    attendanceRecords.map(async (record) => {
-      const student = await ctx.db.get(record.studentRef);
-      return {
-        studentId: record.studentId,
-        rawName: student?.rawName ?? "",
-        displayName: student?.displayName ?? "",
-        firstName: student?.firstName ?? "",
-        lastName: student?.lastName ?? "",
-        sortKey: student?.sortKey ?? `${record.studentId}`,
-        present: record.present,
-        markedAt: record.markedAt,
-        modifiedAt: record.modifiedAt,
-      };
-    }),
-  );
+  const rows = session.isOpen
+    ? loadOpenSessionStudents(ctx, {
+        rosterId: session.rosterId,
+        createdAt: session.createdAt,
+        attendanceRecords,
+      })
+    : Promise.all(
+        attendanceRecords.map(async (record) => {
+          const student = await ctx.db.get(record.studentRef);
+          return {
+            studentId: record.studentId,
+            rawName: student?.rawName ?? "",
+            displayName: student?.displayName ?? "",
+            firstName: student?.firstName ?? "",
+            lastName: student?.lastName ?? "",
+            sortKey: student?.sortKey ?? `${record.studentId}`,
+            present: record.present,
+            markedAt: record.markedAt,
+            modifiedAt: record.modifiedAt,
+          };
+        }),
+      );
 
-  rows.sort((left, right) => left.sortKey.localeCompare(right.sortKey));
+  const resolvedRows = await rows;
+  resolvedRows.sort((left, right) => left.sortKey.localeCompare(right.sortKey));
 
   return {
     roster: {
@@ -108,7 +199,7 @@ async function loadSessionExport(ctx: QueryCtx, sessionId: Id<"sessions">) {
       date: session.date,
       isOpen: session.isOpen,
     },
-    rows: rows.map((row) => ({
+    rows: resolvedRows.map((row) => ({
       studentId: row.studentId,
       rawName: row.rawName,
       displayName: row.displayName,
@@ -208,6 +299,11 @@ export const toggleByEditorToken = mutation({
       throw new Error("This session has ended.");
     }
 
+    const student = await ctx.db.get(args.studentRef);
+    if (!student || student.rosterId !== session.rosterId) {
+      throw new Error("Student not found in this roster.");
+    }
+
     const attendance = await ctx.db
       .query("attendance")
       .withIndex("by_sessionId_studentRef", (q) =>
@@ -216,7 +312,21 @@ export const toggleByEditorToken = mutation({
       .unique();
 
     if (!attendance) {
-      throw new Error("Attendance record not found.");
+      if (!student.active) {
+        throw new Error("Student not found in this roster.");
+      }
+
+      await ctx.db.insert("attendance", {
+        sessionId: session._id,
+        studentRef: student._id,
+        studentId: student.studentId,
+        present: true,
+        markedAt: args.clientNow,
+        lastModifiedAt: args.clientNow,
+        modifiedAt: args.clientNow,
+        modifiedViaTokenType: "editor",
+      });
+      return null;
     }
 
     const now = args.clientNow;

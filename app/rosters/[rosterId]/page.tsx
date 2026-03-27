@@ -1,16 +1,22 @@
 "use client";
 
-import { Check, Play, Square, User } from "lucide-react";
+import { Check, CircleHelp, Copy, Pencil, Play, Share, Square, User } from "lucide-react";
 import Papa from "papaparse";
 import { useMutation, useQuery } from "convex/react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { use, useState } from "react";
+import { use, useEffect, useState } from "react";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { PageShell } from "@/components/page-shell";
+import { Card } from "@/components/ui/card";
+import { Dialog } from "@/components/ui/dialog";
 import { api } from "@/convex/api";
 import type { Id } from "@/convex/model";
+import { getStudentSessionStatus } from "@/lib/roster-status";
 import { buildAbsoluteUrl, buildEditorPath } from "@/lib/session-links";
+
+type SortColumn = "firstName" | "lastName" | "studentId" | "status";
+type SortDirection = "asc" | "desc";
 
 function today() {
   const now = new Date();
@@ -20,19 +26,23 @@ function today() {
   return `${year}-${month}-${day}`;
 }
 
-function formatDate(date: string) {
-  return new Intl.DateTimeFormat(undefined, {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  }).format(new Date(`${date}T00:00:00`));
-}
-
 function sanitizeFilePart(value: string) {
   return value
     .toLocaleLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
+}
+
+function downloadCsvFile(csv: string, fileName: string) {
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = window.URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.URL.revokeObjectURL(url);
 }
 
 export default function RosterDetailPage({
@@ -62,11 +72,56 @@ export default function RosterDetailPage({
   const [isDeletingRoster, setIsDeletingRoster] = useState(false);
   const [isStopDialogOpen, setIsStopDialogOpen] = useState(false);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
+  const [isHelpDialogOpen, setIsHelpDialogOpen] = useState(false);
+  const [canShareCsvFile, setCanShareCsvFile] = useState(false);
+  const [canShareEditorLink, setCanShareEditorLink] = useState(false);
+  const [sortColumn, setSortColumn] = useState<SortColumn>("lastName");
+  const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
   const latestSessionId = data && data !== null ? (data.sessions[0]?._id ?? null) : null;
   const sessionExport = useQuery(
     api.attendance.getSessionExport,
     latestSessionId ? { sessionId: latestSessionId } : "skip",
   );
+
+  useEffect(() => {
+    if (typeof navigator === "undefined" || typeof navigator.share !== "function") {
+      setCanShareEditorLink(false);
+      return;
+    }
+
+    const mobileLikeUserAgent = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+    const coarsePointer =
+      typeof window !== "undefined" &&
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(pointer: coarse)").matches;
+
+    setCanShareEditorLink(mobileLikeUserAgent || coarsePointer);
+  }, []);
+
+  useEffect(() => {
+    if (
+      typeof navigator === "undefined" ||
+      typeof navigator.share !== "function" ||
+      typeof navigator.canShare !== "function"
+    ) {
+      setCanShareCsvFile(false);
+      return;
+    }
+
+    const probeFile = new File(["attendance"], "attendance.csv", {
+      type: "text/csv;charset=utf-8;",
+    });
+
+    const mobileLikeUserAgent = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+    const coarsePointer =
+      typeof window !== "undefined" &&
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(pointer: coarse)").matches;
+
+    setCanShareCsvFile(
+      (mobileLikeUserAgent || coarsePointer) && navigator.canShare({ files: [probeFile] }),
+    );
+  }, []);
 
   if (data === undefined) {
     return (
@@ -95,6 +150,102 @@ export default function RosterDetailPage({
     activeSession && typeof window !== "undefined"
       ? buildAbsoluteUrl(window.location.origin, editorPath)
       : editorPath;
+  const startControlLabel = isStartingSession
+    ? "Starting"
+    : hasStudents
+      ? "Start"
+      : "Add students to start";
+  const stopControlLabel = isStoppingSession ? "Stopping" : "Stop";
+  const editorLinkControlLabel = canShareEditorLink
+    ? "Send attendance link"
+    : copiedLink
+      ? "Copied collection link"
+      : "Collection link";
+  const exportControlLabel = isExporting
+    ? canShareCsvFile
+      ? "Opening share sheet"
+      : "Downloading attendance CSV"
+    : canShareCsvFile
+      ? "Share attendance CSV"
+      : "Download attendance CSV";
+  const isSessionExportLoading = latestSession !== null && sessionExport === undefined;
+  const attendanceByStudentId = new Map(
+    sessionExport?.rows.map((row) => [row.studentId, row.present]) ?? [],
+  );
+  const students = data.students
+    .map((student, index) => {
+      const present = attendanceByStudentId.get(student.studentId);
+      const status = getStudentSessionStatus({
+        hasLatestSession: latestSession !== null,
+        isSessionExportLoading,
+        present,
+      });
+
+      return {
+        ...student,
+        originalIndex: index,
+        statusLabel: status.label,
+        statusTone: status.tone,
+      };
+    })
+    .sort((left, right) => {
+      const direction = sortDirection === "asc" ? 1 : -1;
+
+      switch (sortColumn) {
+        case "firstName":
+          return (
+            left.firstName.localeCompare(right.firstName, undefined, { sensitivity: "base" }) *
+              direction ||
+            left.lastName.localeCompare(right.lastName, undefined, { sensitivity: "base" }) *
+              direction ||
+            left.originalIndex - right.originalIndex
+          );
+        case "lastName":
+          return (
+            left.lastName.localeCompare(right.lastName, undefined, { sensitivity: "base" }) *
+              direction ||
+            left.firstName.localeCompare(right.firstName, undefined, { sensitivity: "base" }) *
+              direction ||
+            left.originalIndex - right.originalIndex
+          );
+        case "studentId":
+          return (
+            left.studentId.localeCompare(right.studentId, undefined, { sensitivity: "base" }) *
+              direction ||
+            left.originalIndex - right.originalIndex
+          );
+        case "status":
+          return (
+            left.statusLabel.localeCompare(right.statusLabel, undefined, { sensitivity: "base" }) *
+              direction ||
+            left.lastName.localeCompare(right.lastName, undefined, { sensitivity: "base" }) *
+              direction ||
+            left.firstName.localeCompare(right.firstName, undefined, { sensitivity: "base" }) *
+              direction ||
+            left.originalIndex - right.originalIndex
+          );
+      }
+    });
+  const presentCount = students.filter((student) => student.statusTone === "present").length;
+  const absentCount = students.filter((student) => student.statusTone === "absent").length;
+
+  function toggleSort(nextColumn: SortColumn) {
+    if (sortColumn === nextColumn) {
+      setSortDirection((current) => (current === "asc" ? "desc" : "asc"));
+      return;
+    }
+
+    setSortColumn(nextColumn);
+    setSortDirection("asc");
+  }
+
+  function sortIndicator(column: SortColumn) {
+    if (sortColumn !== column) {
+      return " ";
+    }
+
+    return sortDirection === "asc" ? " ↑" : " ↓";
+  }
 
   async function handleTitleSave() {
     const nextName = draftTitle.trim();
@@ -155,8 +306,24 @@ export default function RosterDetailPage({
     }
   }
 
-  async function handleCopyEditorLink() {
+  async function handleEditorLinkAction() {
     if (!editorUrl) {
+      return;
+    }
+
+    if (canShareEditorLink && typeof navigator !== "undefined" && typeof navigator.share === "function") {
+      try {
+        await navigator.share({
+          title: `${roster.name} attendance link`,
+          url: editorUrl,
+        });
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") {
+          return;
+        }
+
+        setSessionError(error instanceof Error ? error.message : "Could not send attendance link.");
+      }
       return;
     }
 
@@ -182,13 +349,15 @@ export default function RosterDetailPage({
     }
   }
 
-  function handleExportCsv() {
+  async function handleExportCsv() {
     if (!sessionExport) {
       return;
     }
 
+    setSessionError(null);
     setIsExporting(true);
     try {
+      const fileName = `${sanitizeFilePart(sessionExport.roster.name)}-${sessionExport.session.date}-attendance.csv`;
       const csv = Papa.unparse([
         ["Date", sessionExport.session.date],
         [],
@@ -200,15 +369,55 @@ export default function RosterDetailPage({
         ]),
       ]);
 
-      const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-      const url = window.URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = `${sanitizeFilePart(sessionExport.roster.name)}-${sessionExport.session.date}-attendance.csv`;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      window.URL.revokeObjectURL(url);
+      const file = new File([csv], fileName, {
+        type: "text/csv;charset=utf-8;",
+      });
+
+      if (
+        typeof navigator !== "undefined" &&
+        typeof navigator.share === "function" &&
+        typeof navigator.canShare === "function" &&
+        navigator.canShare({ files: [file] })
+      ) {
+        try {
+          await navigator.share({
+            title: fileName,
+            files: [file],
+          });
+          return;
+        } catch (error) {
+          if (error instanceof DOMException && error.name === "AbortError") {
+            return;
+          }
+
+          // Some browsers expose file-sharing but reject at runtime. Fall back to a download.
+          if (
+            error instanceof DOMException &&
+            (error.name === "NotAllowedError" || error.name === "SecurityError")
+          ) {
+            downloadCsvFile(csv, fileName);
+            return;
+          }
+
+          if (
+            error instanceof Error &&
+            error.message.toLocaleLowerCase().includes("permission denied")
+          ) {
+            downloadCsvFile(csv, fileName);
+            return;
+          }
+
+          throw error;
+        }
+      }
+
+      downloadCsvFile(csv, fileName);
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        return;
+      }
+
+      setSessionError(error instanceof Error ? error.message : "Could not export attendance CSV.");
     } finally {
       setIsExporting(false);
     }
@@ -229,6 +438,17 @@ export default function RosterDetailPage({
 
   return (
     <PageShell
+      headerAction={
+        <button
+          type="button"
+          onClick={() => setIsHelpDialogOpen(true)}
+          aria-label="How attendance sharing works"
+          title="How attendance sharing works"
+          className="inline-flex h-10 w-10 items-center justify-center rounded-full text-slate-500 transition hover:bg-slate-100 hover:text-slate-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+        >
+          <CircleHelp aria-hidden="true" className="h-4 w-4" />
+        </button>
+      }
       title={
         <div>
           {isEditingTitle ? (
@@ -273,18 +493,20 @@ export default function RosterDetailPage({
               {titleError ? <p className="text-sm text-rose-700">{titleError}</p> : null}
             </div>
           ) : (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setDraftTitle(roster.name);
-                    setIsEditingTitle(true);
-                    setTitleError(null);
-                  }}
-                  className="font-heading text-left text-3xl font-semibold tracking-tight text-slate-950 transition hover:text-emerald-700"
-                >
-                  {roster.name}
-                </button>
-              )}
+            <div>
+              <button
+                type="button"
+                onClick={() => {
+                  setDraftTitle(roster.name);
+                  setIsEditingTitle(true);
+                  setTitleError(null);
+                }}
+                className="font-heading text-left text-3xl font-semibold tracking-tight text-slate-950 transition hover:text-emerald-700"
+              >
+                {roster.name}
+              </button>
+            </div>
+          )}
         </div>
       }
       backHref="/"
@@ -292,7 +514,7 @@ export default function RosterDetailPage({
       <ConfirmDialog
         open={isStopDialogOpen}
         title="Stop Session?"
-        description="The session will stop now, but you can resume it later with the same link."
+        description="You can resume it later."
         confirmLabel="Stop session"
         tone="danger"
         busy={isStoppingSession}
@@ -309,177 +531,214 @@ export default function RosterDetailPage({
         onConfirm={() => void handleDeleteRoster()}
         onCancel={() => setIsDeleteDialogOpen(false)}
       />
-      <section className="rounded-[24px] border border-white/70 bg-white/90 p-5 shadow-sm">
+      <Dialog open={isHelpDialogOpen} onClose={() => setIsHelpDialogOpen(false)}>
+        <Card className="w-full border border-white/70 bg-white shadow-xl ring-0">
+          <h2 className="font-heading text-xl font-semibold tracking-tight text-slate-950">
+            How Attendance Sharing Works
+          </h2>
+          <div className="mt-4 space-y-3 text-sm leading-6 text-slate-600">
+            <p>
+              1. Tap <span className="font-semibold text-slate-950">Start</span> to open the attendance session.
+            </p>
+            <p>
+              2. On mobile, tap <span className="font-semibold text-slate-950">Send link</span>. On desktop, use <span className="font-semibold text-slate-950">Collection Link</span>, then send that link to the attendance taker.
+            </p>
+            <p>
+              3. When attendance is finished, tap <span className="font-semibold text-slate-950">Stop</span> and use <span className="font-semibold text-slate-950">Send Attendance</span> to send the CSV.
+            </p>
+          </div>
+          <div className="mt-6">
+            <button
+              type="button"
+              onClick={() => setIsHelpDialogOpen(false)}
+              className="inline-flex h-11 w-full items-center justify-center rounded-full bg-slate-950 px-4 text-sm font-medium text-white transition hover:bg-slate-800"
+            >
+              Close
+            </button>
+          </div>
+        </Card>
+      </Dialog>
+      <section className="space-y-3">
         <div className="space-y-3">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            {activeSession ? (
+          {activeSession ? (
+            <div className="grid w-full grid-cols-2 gap-3">
               <button
                 type="button"
                 onClick={() => setIsStopDialogOpen(true)}
                 disabled={isStoppingSession}
-                className="inline-flex h-11 items-center justify-center rounded-full bg-slate-950 px-4 text-sm font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+                aria-label={stopControlLabel}
+                title={stopControlLabel}
+                className="inline-flex h-[68px] w-full items-center justify-center gap-2 rounded-full bg-rose-600 px-4 sm:px-5 text-sm font-medium text-white transition hover:bg-rose-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-400 disabled:cursor-not-allowed disabled:bg-rose-200"
               >
-                <Square className="mr-2 h-4 w-4" />
-                {isStoppingSession ? "Stopping..." : "Stop session"}
+                <Square className="h-4 w-4" />
+                <span className="hidden sm:inline">{stopControlLabel}</span>
               </button>
-            ) : (
+
               <button
                 type="button"
-                onClick={() =>
-                  void (latestSession ? handleResumeSession() : handleStartSession())
-                }
-                disabled={isStartingSession || !hasStudents}
-                className="inline-flex h-11 items-center justify-center rounded-full bg-slate-950 px-4 text-sm font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+                onClick={() => void handleEditorLinkAction()}
+                aria-label={editorLinkControlLabel}
+                title={editorLinkControlLabel}
+                className="inline-flex h-[68px] w-full items-center justify-center gap-2 rounded-full border border-emerald-200 bg-white/90 px-4 text-sm font-medium text-emerald-950 transition hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
               >
-                <Play className="mr-2 h-4 w-4 fill-current" />
-                {isStartingSession
-                  ? latestSession
-                    ? "Resuming..."
-                    : "Starting..."
-                  : hasStudents
-                    ? latestSession
-                      ? "Resume session"
-                      : "Start session"
-                    : "Add students to start"}
+                {canShareEditorLink ? (
+                  <Share aria-hidden="true" className="h-4 w-4" />
+                ) : copiedLink ? (
+                  <Check aria-hidden="true" className="h-4 w-4 text-emerald-700" />
+                ) : (
+                  <Copy aria-hidden="true" className="h-4 w-4" />
+                )}
+                <span className="hidden sm:inline">{canShareEditorLink ? "Send link" : copiedLink ? "Copied" : "Collection Link"}</span>
               </button>
-            )}
-
-            {latestSession ? (
-              <button
-                type="button"
-                onClick={handleExportCsv}
-                disabled={!sessionExport || isExporting}
-                className="inline-flex h-11 items-center justify-center rounded-full border border-slate-300 bg-white px-4 text-sm font-medium text-slate-700 transition hover:border-slate-400 hover:text-slate-950 disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-400"
-              >
-                {isExporting ? "Exporting..." : "Export attendance CSV"}
-              </button>
-            ) : null}
-          </div>
-
-          {latestSession ? (
-            <div
-              className={`rounded-[24px] border px-4 py-4 ${
-                latestSession.isOpen
-                  ? "border-emerald-200 bg-emerald-50/80"
-                  : "border-slate-200 bg-slate-50/90"
-              }`}
-            >
-              <div>
-                <div
-                  className={`text-xs font-semibold uppercase tracking-[0.16em] ${
-                    latestSession.isOpen ? "text-emerald-700" : "text-slate-500"
-                  }`}
-                >
-                  {latestSession.isOpen ? "Active session" : "Inactive session"}
-                </div>
-                <div className="mt-1 font-semibold text-slate-950">{latestSession.title}</div>
-                <div className="mt-1 text-sm text-slate-600">{formatDate(latestSession.date)}</div>
-              </div>
-              {latestSession.isOpen ? (
-                <div className="mt-4 flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => void handleCopyEditorLink()}
-                    title="Copy editor link"
-                    className={`min-w-0 flex-1 rounded-2xl border px-4 py-3 text-left text-sm outline-none transition focus-visible:ring-2 focus-visible:ring-emerald-500 ${
-                      copiedLink
-                        ? "border-emerald-400 bg-emerald-100 text-emerald-950"
-                        : "border-emerald-200 bg-white text-slate-700 hover:border-emerald-300 hover:bg-emerald-100/60 hover:text-slate-950 active:scale-[0.99]"
-                    }`}
-                  >
-                    <span className="flex items-center justify-between gap-3">
-                      <span className="block min-w-0">
-                        <span className="block truncate font-medium">{editorUrl}</span>
-                        {copiedLink ? (
-                          <span className="mt-1 block text-xs font-semibold uppercase tracking-[0.16em] text-emerald-700">
-                            Copied to clipboard
-                          </span>
-                        ) : null}
-                      </span>
-                      {copiedLink ? (
-                        <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-white px-2 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-emerald-700">
-                          <Check aria-hidden="true" className="h-3.5 w-3.5" />
-                          Copied
-                        </span>
-                      ) : (
-                        <span className="shrink-0 text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
-                          Copy
-                        </span>
-                      )}
-                    </span>
-                  </button>
-                  <Link
-                    href={editorPath}
-                    target="_blank"
-                    className="inline-flex h-11 shrink-0 items-center justify-center rounded-full bg-slate-950 px-4 text-sm font-medium text-white transition hover:bg-slate-800"
-                  >
-                    Open
-                  </Link>
-                </div>
-              ) : null}
             </div>
-          ) : null}
+          ) : (
+            <button
+              type="button"
+              onClick={() =>
+                void (latestSession ? handleResumeSession() : handleStartSession())
+              }
+              disabled={isStartingSession || !hasStudents}
+              aria-label={startControlLabel}
+              title={startControlLabel}
+              className="inline-flex h-[68px] w-full items-center justify-center gap-2 rounded-full bg-emerald-600 px-4 sm:px-5 text-sm font-medium text-white transition hover:bg-emerald-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 disabled:cursor-not-allowed disabled:bg-emerald-200"
+            >
+              <Play className="h-4 w-4 fill-current" />
+              <span className="hidden sm:inline">{startControlLabel}</span>
+            </button>
+          )}
 
           {sessionError ? (
             <p className="text-sm text-rose-700">{sessionError}</p>
           ) : null}
+
+          {!hasStudents ? (
+            <p className="text-sm text-slate-500">Add students before starting a session.</p>
+          ) : null}
         </div>
       </section>
 
-      <section className="rounded-[28px] border border-white/70 bg-white/90 p-5 shadow-sm">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="inline-flex items-center gap-2 text-lg font-semibold tracking-tight text-slate-950">
-            <User aria-hidden="true" className="h-5 w-5 text-slate-500" />
-            <span>{data.students.length}</span>
+      <section className="overflow-hidden rounded-[28px] border border-white/70 bg-white/90 shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-5 py-4">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="inline-flex items-center gap-2 text-sm font-semibold text-slate-700">
+              <span>{data.students.length}</span>
+              <User aria-hidden="true" className="h-4 w-4" />
+            </span>
           </div>
           <div className="flex flex-wrap gap-3">
+            {latestSession ? (
+              <button
+                type="button"
+                onClick={() => void handleExportCsv()}
+                disabled={!sessionExport || isExporting}
+                aria-label={exportControlLabel}
+                title={exportControlLabel}
+                className="inline-flex h-11 items-center justify-center gap-2 rounded-full border border-slate-300 bg-white px-4 text-sm font-medium text-slate-700 transition hover:border-slate-400 hover:text-slate-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-400"
+              >
+                <Share aria-hidden="true" className="h-4 w-4" />
+                <span className="hidden sm:inline">
+                  {canShareCsvFile ? "Send Attendance" : "Download Attendance"}
+                </span>
+              </button>
+            ) : null}
+
             <Link
               href={`/rosters/import?rosterId=${roster._id}`}
-              className="inline-flex h-11 items-center justify-center rounded-full border border-slate-300 px-4 text-sm font-medium text-slate-700 transition hover:border-slate-400 hover:text-slate-950"
+              aria-label="Edit roster"
+              title="Edit roster"
+              className="inline-flex h-11 items-center justify-center gap-2 rounded-full border border-slate-300 px-4 text-sm font-medium text-slate-700 transition hover:border-slate-400 hover:text-slate-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
             >
-              Update roster
+              <Pencil aria-hidden="true" className="h-4 w-4" />
+              <span className="hidden sm:inline">Edit Roster</span>
             </Link>
           </div>
         </div>
 
-        <div className="mt-4 overflow-hidden rounded-[24px] border border-slate-200">
-          <div className="max-h-[32rem] overflow-auto">
-            <table className="min-w-full divide-y divide-slate-200 text-left text-sm">
-              <thead className="sticky top-0 bg-slate-50">
-                <tr>
-                  <th className="px-4 py-3 font-medium text-slate-600">Student</th>
-                  <th className="px-4 py-3 font-medium text-slate-600">Student ID</th>
-                  <th className="px-4 py-3 font-medium text-slate-600">Raw import</th>
+        <div className="max-h-[32rem] overflow-auto">
+          <table className="min-w-full divide-y divide-slate-200 text-left text-sm">
+            <thead className="sticky top-0 bg-slate-50">
+              <tr>
+                <th className="px-4 py-3 font-medium text-slate-600">
+                  <button
+                    type="button"
+                    onClick={() => toggleSort("firstName")}
+                    className="transition hover:text-slate-950"
+                  >
+                    First{sortIndicator("firstName")}
+                  </button>
+                </th>
+                <th className="px-4 py-3 font-medium text-slate-600">
+                  <button
+                    type="button"
+                    onClick={() => toggleSort("lastName")}
+                    className="transition hover:text-slate-950"
+                  >
+                    Last{sortIndicator("lastName")}
+                  </button>
+                </th>
+                <th className="px-4 py-3 font-medium text-slate-600">
+                  <button
+                    type="button"
+                    onClick={() => toggleSort("studentId")}
+                    className="transition hover:text-slate-950"
+                  >
+                    Student ID{sortIndicator("studentId")}
+                  </button>
+                </th>
+                <th className="px-4 py-3 font-medium text-slate-600">
+                  <button
+                    type="button"
+                    onClick={() => toggleSort("status")}
+                    className="inline-flex items-center gap-2 transition hover:text-slate-950"
+                  >
+                    Status{sortIndicator("status")}
+                    <span className="inline-flex min-w-6 items-center justify-center rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-800">
+                      {presentCount}
+                    </span>
+                    <span className="inline-flex min-w-6 items-center justify-center rounded-full bg-rose-100 px-2 py-0.5 text-xs font-semibold text-rose-700">
+                      {absentCount}
+                    </span>
+                  </button>
+                </th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100 bg-white">
+              {students.map((student) => (
+                <tr key={student._id}>
+                  <td className="px-4 py-3 font-medium text-slate-900">{student.firstName}</td>
+                  <td className="px-4 py-3 font-medium text-slate-900">{student.lastName}</td>
+                  <td className="px-4 py-3 text-slate-700">{student.studentId}</td>
+                  <td className="px-4 py-3">
+                    <span
+                      className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${
+                        student.statusTone === "present"
+                          ? "bg-emerald-100 text-emerald-800"
+                          : student.statusTone === "absent"
+                            ? "bg-rose-100 text-rose-700"
+                            : student.statusTone === "loading"
+                              ? "bg-amber-100 text-amber-800"
+                              : "bg-slate-100 text-slate-600"
+                      }`}
+                    >
+                      {student.statusLabel}
+                    </span>
+                  </td>
                 </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 bg-white">
-                {data.students.map((student) => (
-                  <tr key={student._id}>
-                    <td className="px-4 py-3">
-                      <div className="font-medium text-slate-900">{student.displayName}</div>
-                    </td>
-                    <td className="px-4 py-3 text-slate-700">{student.studentId}</td>
-                    <td className="px-4 py-3 text-slate-500">{student.rawName}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+              ))}
+            </tbody>
+          </table>
         </div>
       </section>
 
-      <section className="rounded-[28px] border border-rose-200 bg-rose-50/80 p-5 shadow-sm">
-        <h2 className="font-heading text-lg font-semibold tracking-tight text-rose-900">Danger</h2>
-        <div className="mt-4">
-          <button
-            type="button"
-            onClick={() => setIsDeleteDialogOpen(true)}
-            disabled={isDeletingRoster}
-            className="inline-flex h-11 items-center justify-center rounded-full border border-rose-300 bg-white px-4 text-sm font-medium text-rose-700 transition hover:border-rose-400 hover:text-rose-800 disabled:cursor-not-allowed disabled:border-rose-200 disabled:text-rose-300"
-          >
-            {isDeletingRoster ? "Deleting..." : "Delete roster"}
-          </button>
-        </div>
+      <section>
+        <button
+          type="button"
+          onClick={() => setIsDeleteDialogOpen(true)}
+          disabled={isDeletingRoster}
+          className="inline-flex h-11 w-full items-center justify-center rounded-full border border-rose-300 bg-white px-4 text-sm font-medium text-rose-700 transition hover:border-rose-400 hover:text-rose-800 disabled:cursor-not-allowed disabled:border-rose-200 disabled:text-rose-300"
+        >
+          {isDeletingRoster ? "Deleting..." : "Delete roster"}
+        </button>
       </section>
 
     </PageShell>

@@ -19,6 +19,74 @@ async function loadRosterStudents(ctx: MutationCtx, rosterId: Id<"rosters">) {
     .collect();
 }
 
+async function syncStudentIntoOpenSessions(
+  ctx: MutationCtx,
+  rosterId: Id<"rosters">,
+  student: {
+    _id: Id<"students">;
+    studentId: string;
+  },
+) {
+  const rosterSessions = await ctx.db
+    .query("sessions")
+    .withIndex("by_rosterId_createdAt", (q) => q.eq("rosterId", rosterId))
+    .collect();
+
+  const openSessions = rosterSessions.filter((session) => session.isOpen);
+  if (openSessions.length === 0) {
+    return;
+  }
+
+  const now = Date.now();
+
+  for (const session of openSessions) {
+    const existingAttendance = await ctx.db
+      .query("attendance")
+      .withIndex("by_sessionId_studentRef", (q) =>
+        q.eq("sessionId", session._id).eq("studentRef", student._id),
+      )
+      .unique();
+
+    if (existingAttendance) {
+      continue;
+    }
+
+    await ctx.db.insert("attendance", {
+      sessionId: session._id,
+      studentRef: student._id,
+      studentId: student.studentId,
+      present: false,
+      modifiedAt: now,
+    });
+  }
+}
+
+function mapStudentsByStudentId(
+  students: Array<{
+    _id: Id<"students">;
+    studentId: string;
+  }>,
+) {
+  const duplicateStudentIds = new Set<string>();
+  const studentsByStudentId = new Map<string, (typeof students)[number]>();
+
+  for (const student of students) {
+    if (studentsByStudentId.has(student.studentId)) {
+      duplicateStudentIds.add(student.studentId);
+      continue;
+    }
+
+    studentsByStudentId.set(student.studentId, student);
+  }
+
+  if (duplicateStudentIds.size > 0) {
+    const ids = [...duplicateStudentIds].sort().join(", ");
+    throw new Error(`Roster already contains duplicate student IDs: ${ids}.`);
+  }
+
+  return studentsByStudentId;
+}
+
 function validateImportedStudents(
   students: Array<{
     studentId: string;
@@ -51,6 +119,7 @@ export const list = query({
       createdAt: v.number(),
       studentCount: v.number(),
       sessionCount: v.number(),
+      hasActiveSession: v.boolean(),
       latestSessionId: v.optional(v.id("sessions")),
     }),
   ),
@@ -80,6 +149,7 @@ export const list = query({
           createdAt: roster.createdAt,
           studentCount: students.length,
           sessionCount: sessions.length,
+          hasActiveSession: sessions.some((session) => session.isOpen),
           latestSessionId: latestSession?._id,
         };
       }),
@@ -264,9 +334,7 @@ export const importIntoExisting = mutation({
     validateImportedStudents(args.students);
 
     const existingStudents = await loadRosterStudents(ctx, args.rosterId);
-    const existingByStudentId = new Map(
-      existingStudents.map((student) => [student.studentId, student] as const),
-    );
+    const existingByStudentId = mapStudentsByStudentId(existingStudents);
 
     await ctx.db.patch(args.rosterId, { name });
 
@@ -290,10 +358,14 @@ export const importIntoExisting = mutation({
           sortKey: student.sortKey,
           active: true,
         });
+        await syncStudentIntoOpenSessions(ctx, args.rosterId, {
+          _id: existingStudent._id,
+          studentId: student.studentId,
+        });
         continue;
       }
 
-      await ctx.db.insert("students", {
+      const studentId = await ctx.db.insert("students", {
         rosterId: args.rosterId,
         studentId: student.studentId,
         rawName: student.rawName,
@@ -302,6 +374,10 @@ export const importIntoExisting = mutation({
         displayName: student.displayName,
         sortKey: student.sortKey,
         active: true,
+      });
+      await syncStudentIntoOpenSessions(ctx, args.rosterId, {
+        _id: studentId,
+        studentId: student.studentId,
       });
     }
 

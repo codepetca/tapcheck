@@ -1,7 +1,7 @@
 "use client";
 
 import { useMutation, useQuery } from "convex/react";
-import { ChevronDown, Search, SlidersHorizontal } from "lucide-react";
+import { Search } from "lucide-react";
 import Link from "next/link";
 import { useDeferredValue, useState } from "react";
 import { api } from "@/convex/api";
@@ -29,11 +29,10 @@ export function SessionAttendanceScreen({
   token,
 }: SessionAttendanceScreenProps) {
   const session = useQuery(api.attendance.getEditorSessionByToken, { token });
+  const studentGridTemplateColumns = "minmax(0, 1fr) minmax(0, 1fr) minmax(7rem, 0.9fr)";
 
   const [search, setSearch] = useState("");
-  const [hidePresent, setHidePresent] = useState(false);
   const [sortMode, setSortMode] = useState<SortMode>("last");
-  const [showFilters, setShowFilters] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const deferredSearch = useDeferredValue(search.trim().toLocaleLowerCase());
 
@@ -154,6 +153,10 @@ export function SessionAttendanceScreen({
   const notYetMarked = sortedStudents.filter((student) => !student.present);
   const presentStudents = sortedStudents.filter((student) => student.present);
 
+  function handleSort(nextSortMode: SortMode) {
+    setSortMode(nextSortMode);
+  }
+
   async function handleToggle(studentRef: Id<"students">) {
     setError(null);
     try {
@@ -169,18 +172,30 @@ export function SessionAttendanceScreen({
 
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-3xl flex-col px-3 py-3 sm:px-6">
-      <div className="rounded-[30px] border border-emerald-100 bg-[linear-gradient(180deg,#ffffff_0%,#f2fbf7_100%)] px-5 py-5 shadow-sm ring-1 ring-slate-950/5">
-        <div className="flex items-start justify-between gap-4">
-          <h1 className="font-heading min-w-0 text-2xl font-semibold tracking-tight text-slate-950">
-            {session.session.title}
-          </h1>
-          <div className="shrink-0 rounded-2xl bg-slate-950 px-3 py-3 text-white shadow-sm">
-            <div className="flex items-center gap-2 whitespace-nowrap">
-              <span className="text-2xl font-semibold leading-none">{session.presentCount}</span>
-              <span className="px-1 text-sm font-medium leading-none text-slate-300">
-                {session.totalCount}
-              </span>
-            </div>
+      <div className="rounded-[30px] border border-emerald-100 bg-[linear-gradient(180deg,#ffffff_0%,#f2fbf7_100%)] px-4 py-4 shadow-sm ring-1 ring-slate-950/5">
+        <h1 className="font-heading truncate text-center text-xl font-semibold tracking-tight text-slate-950 sm:text-2xl">
+          {session.session.title}
+        </h1>
+        <div className="mt-4 flex items-stretch gap-3">
+          <div className="relative min-w-0 flex-1">
+            <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+            <input
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Search name or student ID"
+              className="h-12 w-full rounded-2xl border border-slate-300 bg-white pl-11 pr-4 text-base text-slate-950 outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
+            />
+          </div>
+          <div
+            aria-label={`${session.presentCount} of ${session.totalCount} students marked present`}
+            className="inline-flex shrink-0 items-stretch overflow-hidden rounded-full bg-slate-950 text-white shadow-sm"
+          >
+            <span className="flex min-w-14 items-center justify-center px-4 text-2xl font-semibold leading-none">
+              {session.presentCount}
+            </span>
+            <span className="flex min-w-12 items-center justify-center border-l border-slate-700 bg-slate-700 px-4 text-lg font-medium leading-none text-slate-200">
+              {session.totalCount}
+            </span>
           </div>
         </div>
         {error ? (
@@ -190,135 +205,103 @@ export function SessionAttendanceScreen({
         ) : null}
       </div>
 
-      <div className="sticky top-0 z-10 mt-4 rounded-[28px] border border-white/70 bg-white/90 px-4 py-4 shadow-sm backdrop-blur">
-        <div className="relative">
-          <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-          <input
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            placeholder="Search name or student ID"
-            className="h-12 w-full rounded-2xl border border-slate-300 bg-white pl-11 pr-4 text-base text-slate-950 outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
-          />
-        </div>
-        <div className="mt-3">
-          <button
-            type="button"
-            onClick={() => setShowFilters((current) => !current)}
-            className="inline-flex h-10 items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-4 text-sm font-medium text-slate-700 transition hover:border-slate-300 hover:text-slate-950"
+      <div className="sticky top-0 z-10 mt-4">
+        <div className="px-4 py-0">
+          <div
+            className="grid items-center gap-3 px-2 text-left font-semibold uppercase tracking-[0.16em]"
+            style={{ gridTemplateColumns: studentGridTemplateColumns }}
           >
-            <SlidersHorizontal className="h-4 w-4" />
-            Options
-            <ChevronDown
-              className={`h-4 w-4 transition ${showFilters ? "rotate-180" : ""}`}
-            />
-          </button>
-        </div>
-        {showFilters ? (
-          <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 pt-3">
-            <div className="flex items-center gap-2">
-              <span className="text-sm text-slate-500">Sort</span>
-              <div className="flex rounded-full border border-slate-200 bg-slate-50 p-1">
-                {(
-                  [
-                    { value: "last", label: "Last" },
-                    { value: "first", label: "First" },
-                    { value: "id", label: "ID" },
-                  ] as const
-                ).map((option) => (
-                  <button
-                    key={option.value}
-                    type="button"
-                    onClick={() => setSortMode(option.value)}
-                    className={`rounded-full px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.12em] transition ${
-                      sortMode === option.value
-                        ? "bg-white text-slate-950 shadow-sm"
-                        : "text-slate-500"
-                    }`}
-                  >
-                    {option.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <label className="flex items-center gap-2 text-sm text-slate-700">
-              <input
-                type="checkbox"
-                checked={hidePresent}
-                onChange={(event) => setHidePresent(event.target.checked)}
-                className="h-5 w-5 accent-emerald-600"
-              />
-              <span>Hide marked</span>
-            </label>
+            <button
+              type="button"
+              onClick={() => handleSort("first")}
+              className={`truncate border-b-2 py-0.5 text-left leading-none transition ${
+                sortMode === "first"
+                  ? "border-slate-300 text-base text-slate-950"
+                  : "border-transparent text-base text-slate-500 hover:text-slate-950"
+              }`}
+            >
+              First
+            </button>
+            <button
+              type="button"
+              onClick={() => handleSort("last")}
+              className={`truncate border-b-2 py-0.5 text-left leading-none transition ${
+                sortMode === "last"
+                  ? "border-slate-300 text-base text-slate-950"
+                  : "border-transparent text-base text-slate-500 hover:text-slate-950"
+              }`}
+            >
+              Last
+            </button>
+            <button
+              type="button"
+              onClick={() => handleSort("id")}
+              className={`border-b-2 py-0.5 text-left leading-none transition ${
+                sortMode === "id"
+                  ? "border-slate-300 text-base text-slate-950"
+                  : "border-transparent text-base text-slate-500 hover:text-slate-950"
+              }`}
+            >
+              Student ID
+            </button>
           </div>
-        ) : null}
+        </div>
       </div>
 
       <section className="mt-4">
-        <div className="mb-2 flex items-center justify-between px-1">
-          <h2 className="text-sm font-semibold uppercase tracking-[0.22em] text-slate-500">
-            Not Yet Marked
-          </h2>
-          <span className="text-sm text-slate-500">{notYetMarked.length}</span>
-        </div>
         <div className="space-y-1.5">
-          {notYetMarked.length === 0 ? (
-            <div className="rounded-[24px] border border-dashed border-slate-300 bg-white/80 px-4 py-6 text-center text-sm text-slate-500">
-              No students in this section.
-            </div>
-          ) : null}
           {notYetMarked.map((student) => (
             <button
               key={student.studentRef}
               type="button"
               onClick={() => void handleToggle(student.studentRef)}
-              className="flex min-h-13 w-full items-center rounded-[20px] border border-slate-200 bg-white px-4 py-3 text-left shadow-sm transition hover:border-emerald-300 hover:bg-emerald-50/60 active:scale-[0.99]"
+              className="grid min-h-13 w-full items-center gap-3 rounded-[20px] border border-slate-200 bg-white px-4 py-3 text-left shadow-sm transition hover:border-emerald-300 hover:bg-emerald-50/60 active:scale-[0.99]"
+              style={{ gridTemplateColumns: studentGridTemplateColumns }}
             >
-              <div>
-                <div className="text-base font-semibold text-slate-950">
-                  {student.displayName}
-                  <span className="ml-2 text-sm font-medium text-slate-500">#{student.studentId}</span>
-                </div>
+              <div className="min-w-0 text-base font-semibold text-slate-950">
+                <span className="block truncate">{student.firstName || " "}</span>
               </div>
+              <div className="min-w-0 text-base font-semibold text-slate-950">
+                <span className="block truncate">{student.lastName || student.displayName}</span>
+              </div>
+              <div className="text-left text-sm font-medium text-slate-500">{student.studentId}</div>
             </button>
           ))}
         </div>
       </section>
 
-      {!hidePresent ? (
-        <section className="mt-6 pb-8">
-          <div className="mb-2 flex items-center justify-between px-1">
-            <h2 className="text-sm font-semibold uppercase tracking-[0.22em] text-emerald-700">
-              Present
-            </h2>
-            <span className="text-sm text-slate-500">{presentStudents.length}</span>
-          </div>
-          <div className="space-y-1.5">
-            {presentStudents.length === 0 ? (
-              <div className="rounded-[24px] border border-dashed border-slate-300 bg-white/80 px-4 py-6 text-center text-sm text-slate-500">
-                No students marked present yet.
+      <section className="mt-6 pb-8">
+        <div className="mb-2 flex items-center justify-between px-1">
+          <h2 className="text-sm font-semibold uppercase tracking-[0.22em] text-emerald-700">
+            Present
+          </h2>
+          <span className="text-sm text-slate-500">{presentStudents.length}</span>
+        </div>
+        <div className="space-y-1.5">
+          {presentStudents.map((student) => (
+            <button
+              key={student.studentRef}
+              type="button"
+              onClick={() => void handleToggle(student.studentRef)}
+              className="grid min-h-13 w-full items-center gap-3 rounded-[20px] border border-emerald-200 bg-emerald-50 px-4 py-3 text-left shadow-sm transition hover:border-emerald-300 hover:bg-emerald-100/70 active:scale-[0.99]"
+              style={{ gridTemplateColumns: studentGridTemplateColumns }}
+            >
+              <div className="min-w-0 text-base font-semibold text-slate-950">
+                <span className="block truncate">{student.firstName || " "}</span>
               </div>
-            ) : null}
-            {presentStudents.map((student) => (
-              <button
-                key={student.studentRef}
-                type="button"
-                onClick={() => void handleToggle(student.studentRef)}
-                className="flex min-h-13 w-full items-center rounded-[20px] border border-emerald-200 bg-emerald-50 px-4 py-3 text-left shadow-sm transition hover:border-emerald-300 hover:bg-emerald-100/70 active:scale-[0.99]"
-              >
-                <div>
-                  <div className="text-base font-semibold text-slate-950">
-                    {student.displayName}
-                    <span className="ml-2 text-sm font-medium text-emerald-700/80">#{student.studentId}</span>
-                  </div>
-                  <div className="mt-1 text-sm text-emerald-700">
-                    Present{student.markedAt ? ` • ${formatMarkedTime(student.markedAt)}` : ""}
-                  </div>
+              <div className="min-w-0">
+                <div className="truncate text-base font-semibold text-slate-950">
+                  {student.lastName || student.displayName}
                 </div>
-              </button>
-            ))}
-          </div>
-        </section>
-      ) : null}
+                <div className="mt-1 text-xs font-medium text-emerald-700">
+                  Present{student.markedAt ? ` • ${formatMarkedTime(student.markedAt)}` : ""}
+                </div>
+              </div>
+              <div className="text-left text-sm font-medium text-emerald-700/80">{student.studentId}</div>
+            </button>
+          ))}
+        </div>
+      </section>
     </main>
   );
 }
