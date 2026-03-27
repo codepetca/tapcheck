@@ -19,6 +19,48 @@ async function loadRosterStudents(ctx: MutationCtx, rosterId: Id<"rosters">) {
     .collect();
 }
 
+async function syncStudentIntoOpenSessions(
+  ctx: MutationCtx,
+  rosterId: Id<"rosters">,
+  student: {
+    _id: Id<"students">;
+    studentId: string;
+  },
+) {
+  const rosterSessions = await ctx.db
+    .query("sessions")
+    .withIndex("by_rosterId_createdAt", (q) => q.eq("rosterId", rosterId))
+    .collect();
+
+  const openSessions = rosterSessions.filter((session) => session.isOpen);
+  if (openSessions.length === 0) {
+    return;
+  }
+
+  const now = Date.now();
+
+  for (const session of openSessions) {
+    const existingAttendance = await ctx.db
+      .query("attendance")
+      .withIndex("by_sessionId_studentRef", (q) =>
+        q.eq("sessionId", session._id).eq("studentRef", student._id),
+      )
+      .unique();
+
+    if (existingAttendance) {
+      continue;
+    }
+
+    await ctx.db.insert("attendance", {
+      sessionId: session._id,
+      studentRef: student._id,
+      studentId: student.studentId,
+      present: false,
+      modifiedAt: now,
+    });
+  }
+}
+
 function validateImportedStudents(
   students: Array<{
     studentId: string;
@@ -292,10 +334,14 @@ export const importIntoExisting = mutation({
           sortKey: student.sortKey,
           active: true,
         });
+        await syncStudentIntoOpenSessions(ctx, args.rosterId, {
+          _id: existingStudent._id,
+          studentId: student.studentId,
+        });
         continue;
       }
 
-      await ctx.db.insert("students", {
+      const studentId = await ctx.db.insert("students", {
         rosterId: args.rosterId,
         studentId: student.studentId,
         rawName: student.rawName,
@@ -304,6 +350,10 @@ export const importIntoExisting = mutation({
         displayName: student.displayName,
         sortKey: student.sortKey,
         active: true,
+      });
+      await syncStudentIntoOpenSessions(ctx, args.rosterId, {
+        _id: studentId,
+        studentId: student.studentId,
       });
     }
 
