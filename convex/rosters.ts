@@ -61,6 +61,32 @@ async function syncStudentIntoOpenSessions(
   }
 }
 
+function mapStudentsByStudentId(
+  students: Array<{
+    _id: Id<"students">;
+    studentId: string;
+  }>,
+) {
+  const duplicateStudentIds = new Set<string>();
+  const studentsByStudentId = new Map<string, (typeof students)[number]>();
+
+  for (const student of students) {
+    if (studentsByStudentId.has(student.studentId)) {
+      duplicateStudentIds.add(student.studentId);
+      continue;
+    }
+
+    studentsByStudentId.set(student.studentId, student);
+  }
+
+  if (duplicateStudentIds.size > 0) {
+    const ids = [...duplicateStudentIds].sort().join(", ");
+    throw new Error(`Roster already contains duplicate student IDs: ${ids}.`);
+  }
+
+  return studentsByStudentId;
+}
+
 function validateImportedStudents(
   students: Array<{
     studentId: string;
@@ -308,9 +334,7 @@ export const importIntoExisting = mutation({
     validateImportedStudents(args.students);
 
     const existingStudents = await loadRosterStudents(ctx, args.rosterId);
-    const existingByStudentId = new Map(
-      existingStudents.map((student) => [student.studentId, student] as const),
-    );
+    const existingByStudentId = mapStudentsByStudentId(existingStudents);
 
     await ctx.db.patch(args.rosterId, { name });
 
