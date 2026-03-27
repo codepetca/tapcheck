@@ -91,16 +91,9 @@ export function SessionAttendanceScreen({
     return (
       <main className="mx-auto flex min-h-screen w-full max-w-3xl flex-col justify-center px-4 py-8 sm:px-6">
         <div className="rounded-[28px] border border-white/70 bg-white px-6 py-10 text-center shadow-sm">
-          <p className="text-sm font-medium uppercase tracking-[0.2em] text-slate-400">
-            Invalid link
-          </p>
-          <h1 className="font-heading mt-3 text-2xl font-semibold tracking-tight text-slate-950">
+          <h1 className="font-heading text-2xl font-semibold tracking-tight text-slate-950">
             This attendance link is not available.
           </h1>
-          <p className="mt-3 text-sm leading-6 text-slate-600">
-            Check the link and try again. If the problem continues, create a new session
-            share link.
-          </p>
           <Link
             href="/"
             className="mt-6 inline-flex h-11 items-center justify-center rounded-full border border-slate-300 px-5 text-sm font-medium text-slate-700 transition hover:border-slate-400 hover:text-slate-950"

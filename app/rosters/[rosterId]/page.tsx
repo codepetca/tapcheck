@@ -538,13 +538,13 @@ export default function RosterDetailPage({
           </h2>
           <div className="mt-4 space-y-3 text-sm leading-6 text-slate-600">
             <p>
-              1. Tap <span className="font-semibold text-slate-950">Start</span> to open the attendance session.
+              1. Tap <span className="font-semibold text-slate-950">Start</span>.
             </p>
             <p>
-              2. On mobile, tap <span className="font-semibold text-slate-950">Send link</span>. On desktop, use <span className="font-semibold text-slate-950">Collection Link</span>, then send that link to the attendance taker.
+              2. Share the <span className="font-semibold text-slate-950">Collection Link</span>.
             </p>
             <p>
-              3. When attendance is finished, tap <span className="font-semibold text-slate-950">Stop</span> and use <span className="font-semibold text-slate-950">Send Attendance</span> to send the CSV.
+              3. Take attendance.
             </p>
           </div>
           <div className="mt-6">
