@@ -1,11 +1,13 @@
 "use client";
 
 import { useMutation, useQuery } from "convex/react";
-import { Search } from "lucide-react";
+import { Search, X } from "lucide-react";
 import Link from "next/link";
+import type { Dispatch, SetStateAction } from "react";
 import { useDeferredValue, useState } from "react";
 import { api } from "@/convex/api";
 import type { Id } from "@/convex/model";
+import { cn } from "@/lib/cn";
 import { getCurrentTimestamp } from "@/lib/time";
 
 type SessionAttendanceScreenProps = {
@@ -13,6 +15,8 @@ type SessionAttendanceScreenProps = {
 };
 
 type SortMode = "last" | "first" | "id";
+
+const ATTENDANCE_TAP_EXIT_MS = 160;
 
 function formatMarkedTime(timestamp?: number) {
   if (!timestamp) {
@@ -34,6 +38,10 @@ export function SessionAttendanceScreen({
   const [search, setSearch] = useState("");
   const [sortMode, setSortMode] = useState<SortMode>("last");
   const [error, setError] = useState<string | null>(null);
+  const [exitingStudentRefs, setExitingStudentRefs] = useState<Set<Id<"students">>>(() => new Set());
+  const [submittingStudentRefs, setSubmittingStudentRefs] = useState<Set<Id<"students">>>(
+    () => new Set(),
+  );
   const deferredSearch = useDeferredValue(search.trim().toLocaleLowerCase());
 
   const toggleAttendance = useMutation(api.attendance.toggleByEditorToken).withOptimisticUpdate(
@@ -150,16 +158,50 @@ export function SessionAttendanceScreen({
     setSortMode(nextSortMode);
   }
 
+  function setStudentTransitionState(
+    studentRef: Id<"students">,
+    setter: Dispatch<SetStateAction<Set<Id<"students">>>>,
+    active: boolean,
+  ) {
+    setter((current) => {
+      const next = new Set(current);
+
+      if (active) {
+        next.add(studentRef);
+      } else {
+        next.delete(studentRef);
+      }
+
+      return next;
+    });
+  }
+
   async function handleToggle(studentRef: Id<"students">) {
+    if (submittingStudentRefs.has(studentRef)) {
+      return;
+    }
+
     setError(null);
+    setStudentTransitionState(studentRef, setSubmittingStudentRefs, true);
+    setStudentTransitionState(studentRef, setExitingStudentRefs, true);
+
     try {
+      await new Promise<void>((resolve) => {
+        window.setTimeout(resolve, ATTENDANCE_TAP_EXIT_MS);
+      });
+
+      setStudentTransitionState(studentRef, setExitingStudentRefs, false);
       await toggleAttendance({
         token,
         studentRef,
         clientNow: getCurrentTimestamp(),
       });
+      setSearch("");
     } catch (toggleError) {
       setError(toggleError instanceof Error ? toggleError.message : "Unable to update attendance.");
+    } finally {
+      setStudentTransitionState(studentRef, setExitingStudentRefs, false);
+      setStudentTransitionState(studentRef, setSubmittingStudentRefs, false);
     }
   }
 
@@ -176,8 +218,18 @@ export function SessionAttendanceScreen({
               value={search}
               onChange={(event) => setSearch(event.target.value)}
               placeholder="Search name or student ID"
-              className="h-12 w-full rounded-2xl border border-slate-300 bg-white pl-11 pr-4 text-base text-slate-950 outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
+              className="h-12 w-full rounded-2xl border border-slate-300 bg-white pl-11 pr-12 text-base text-slate-950 outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
             />
+            {search ? (
+              <button
+                type="button"
+                onClick={() => setSearch("")}
+                aria-label="Clear search"
+                className="absolute right-2 top-1/2 inline-flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            ) : null}
           </div>
           <div
             aria-label={`${session.presentCount} of ${session.totalCount} students marked present`}
@@ -242,24 +294,43 @@ export function SessionAttendanceScreen({
       </div>
 
       <section className="mt-4">
-        <div className="space-y-1.5">
-          {notYetMarked.map((student) => (
-            <button
-              key={student.studentRef}
-              type="button"
-              onClick={() => void handleToggle(student.studentRef)}
-              className="grid min-h-13 w-full items-center gap-3 rounded-[20px] border border-slate-200 bg-white px-4 py-3 text-left shadow-sm transition hover:border-emerald-300 hover:bg-emerald-50/60 active:scale-[0.99]"
-              style={{ gridTemplateColumns: studentGridTemplateColumns }}
-            >
-              <div className="min-w-0 text-base font-semibold text-slate-950">
-                <span className="block truncate">{student.firstName || " "}</span>
+        <div>
+          {notYetMarked.map((student) => {
+            const isSubmitting = submittingStudentRefs.has(student.studentRef);
+            const isExiting = exitingStudentRefs.has(student.studentRef);
+
+            return (
+              <div
+                key={student.studentRef}
+                className={cn(
+                  "grid overflow-hidden transition-[grid-template-rows,margin-bottom,opacity] duration-180 ease-in",
+                  isExiting ? "mb-0 grid-rows-[0fr] opacity-80" : "mb-1.5 grid-rows-[1fr] opacity-100 last:mb-0",
+                )}
+              >
+                <div className="min-h-0">
+                  <button
+                    type="button"
+                    onClick={() => void handleToggle(student.studentRef)}
+                    disabled={isSubmitting}
+                    aria-busy={isSubmitting}
+                    className={cn(
+                      "grid min-h-13 w-full origin-top items-center gap-3 rounded-[20px] border border-slate-200 bg-white px-4 py-3 text-left shadow-sm transition-[transform,opacity,background-color,border-color] duration-180 ease-out hover:border-emerald-300 hover:bg-emerald-50/60 active:scale-[0.99] disabled:cursor-wait",
+                      isExiting && "pointer-events-none scale-y-75 opacity-40",
+                    )}
+                    style={{ gridTemplateColumns: studentGridTemplateColumns }}
+                  >
+                    <div className="min-w-0 text-base font-semibold text-slate-950">
+                      <span className="block truncate">{student.firstName || " "}</span>
+                    </div>
+                    <div className="min-w-0 text-base font-semibold text-slate-950">
+                      <span className="block truncate">{student.lastName || student.displayName}</span>
+                    </div>
+                    <div className="text-left text-sm font-medium text-slate-500">{student.studentId}</div>
+                  </button>
+                </div>
               </div>
-              <div className="min-w-0 text-base font-semibold text-slate-950">
-                <span className="block truncate">{student.lastName || student.displayName}</span>
-              </div>
-              <div className="text-left text-sm font-medium text-slate-500">{student.studentId}</div>
-            </button>
-          ))}
+            );
+          })}
         </div>
       </section>
 
@@ -270,29 +341,48 @@ export function SessionAttendanceScreen({
           </h2>
           <span className="text-sm text-slate-500">{presentStudents.length}</span>
         </div>
-        <div className="space-y-1.5">
-          {presentStudents.map((student) => (
-            <button
-              key={student.studentRef}
-              type="button"
-              onClick={() => void handleToggle(student.studentRef)}
-              className="grid min-h-13 w-full items-center gap-3 rounded-[20px] border border-emerald-200 bg-emerald-50 px-4 py-3 text-left shadow-sm transition hover:border-emerald-300 hover:bg-emerald-100/70 active:scale-[0.99]"
-              style={{ gridTemplateColumns: studentGridTemplateColumns }}
-            >
-              <div className="min-w-0 text-base font-semibold text-slate-950">
-                <span className="block truncate">{student.firstName || " "}</span>
-              </div>
-              <div className="min-w-0">
-                <div className="truncate text-base font-semibold text-slate-950">
-                  {student.lastName || student.displayName}
+        <div>
+          {presentStudents.map((student) => {
+            const isSubmitting = submittingStudentRefs.has(student.studentRef);
+            const isExiting = exitingStudentRefs.has(student.studentRef);
+
+            return (
+              <div
+                key={student.studentRef}
+                className={cn(
+                  "grid overflow-hidden transition-[grid-template-rows,margin-bottom,opacity] duration-180 ease-in",
+                  isExiting ? "mb-0 grid-rows-[0fr] opacity-80" : "mb-1.5 grid-rows-[1fr] opacity-100 last:mb-0",
+                )}
+              >
+                <div className="min-h-0">
+                  <button
+                    type="button"
+                    onClick={() => void handleToggle(student.studentRef)}
+                    disabled={isSubmitting}
+                    aria-busy={isSubmitting}
+                    className={cn(
+                      "grid min-h-13 w-full origin-top items-center gap-3 rounded-[20px] border border-emerald-200 bg-emerald-50 px-4 py-3 text-left shadow-sm transition-[transform,opacity,background-color,border-color] duration-180 ease-out hover:border-emerald-300 hover:bg-emerald-100/70 active:scale-[0.99] disabled:cursor-wait",
+                      isExiting && "pointer-events-none scale-y-75 opacity-40",
+                    )}
+                    style={{ gridTemplateColumns: studentGridTemplateColumns }}
+                  >
+                    <div className="min-w-0 text-base font-semibold text-slate-950">
+                      <span className="block truncate">{student.firstName || " "}</span>
+                    </div>
+                    <div className="min-w-0">
+                      <div className="truncate text-base font-semibold text-slate-950">
+                        {student.lastName || student.displayName}
+                      </div>
+                      <div className="mt-1 text-xs font-medium text-emerald-700">
+                        Present{student.markedAt ? ` • ${formatMarkedTime(student.markedAt)}` : ""}
+                      </div>
+                    </div>
+                    <div className="text-left text-sm font-medium text-emerald-700/80">{student.studentId}</div>
+                  </button>
                 </div>
-                <div className="mt-1 text-xs font-medium text-emerald-700">
-                  Present{student.markedAt ? ` • ${formatMarkedTime(student.markedAt)}` : ""}
-                </div>
               </div>
-              <div className="text-left text-sm font-medium text-emerald-700/80">{student.studentId}</div>
-            </button>
-          ))}
+            );
+          })}
         </div>
       </section>
     </main>
