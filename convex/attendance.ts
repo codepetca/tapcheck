@@ -10,6 +10,86 @@ async function loadActiveRosterStudents(ctx: QueryCtx, rosterId: Id<"rosters">) 
     .collect();
 }
 
+type SessionStudentRow = {
+  studentRef: Id<"students">;
+  studentId: string;
+  rawName: string;
+  displayName: string;
+  firstName: string;
+  lastName: string;
+  sortKey: string;
+  present: boolean;
+  markedAt: number | undefined;
+  modifiedAt: number;
+  lastModifiedAt: number | undefined;
+};
+
+async function loadOpenSessionStudents(
+  ctx: QueryCtx,
+  args: {
+    rosterId: Id<"rosters">;
+    createdAt: number;
+    attendanceRecords: Array<{
+      _id: Id<"attendance">;
+      studentRef: Id<"students">;
+      studentId: string;
+      present: boolean;
+      markedAt?: number;
+      modifiedAt: number;
+      lastModifiedAt?: number;
+    }>;
+  },
+) {
+  const [attendanceStudents, activeStudents] = await Promise.all([
+    Promise.all(args.attendanceRecords.map((record) => ctx.db.get(record.studentRef))),
+    loadActiveRosterStudents(ctx, args.rosterId),
+  ]);
+
+  const studentsByRef = new Map<Id<"students">, SessionStudentRow>();
+
+  for (const [index, record] of args.attendanceRecords.entries()) {
+    const student = attendanceStudents[index];
+
+    studentsByRef.set(record.studentRef, {
+      studentRef: record.studentRef,
+      studentId: record.studentId,
+      rawName: student?.rawName ?? "",
+      displayName: student?.displayName ?? student?.rawName ?? record.studentId,
+      firstName: student?.firstName ?? "",
+      lastName: student?.lastName ?? "",
+      sortKey: student?.sortKey ?? `${record.studentId}`,
+      present: record.present,
+      markedAt: record.markedAt,
+      modifiedAt: record.modifiedAt,
+      lastModifiedAt: record.lastModifiedAt,
+    });
+  }
+
+  for (const student of activeStudents) {
+    if (studentsByRef.has(student._id)) {
+      continue;
+    }
+
+    studentsByRef.set(student._id, {
+      studentRef: student._id,
+      studentId: student.studentId,
+      rawName: student.rawName,
+      displayName: student.displayName || student.rawName || student.studentId,
+      firstName: student.firstName,
+      lastName: student.lastName,
+      sortKey: student.sortKey,
+      present: false,
+      markedAt: undefined,
+      modifiedAt: args.createdAt,
+      lastModifiedAt: undefined,
+    });
+  }
+
+  const students = [...studentsByRef.values()];
+  students.sort((left, right) => left.sortKey.localeCompare(right.sortKey));
+  return students;
+}
+
 async function loadEditorSessionSnapshot(ctx: QueryCtx, token: string) {
   const session = await ctx.db
     .query("sessions")
@@ -20,37 +100,22 @@ async function loadEditorSessionSnapshot(ctx: QueryCtx, token: string) {
     return null;
   }
 
-  const [roster, attendanceRecords, activeStudents] = await Promise.all([
+  const [roster, attendanceRecords] = await Promise.all([
     ctx.db.get(session.rosterId),
     ctx.db
       .query("attendance")
       .withIndex("by_sessionId", (q) => q.eq("sessionId", session._id))
       .collect(),
-    loadActiveRosterStudents(ctx, session.rosterId),
   ]);
 
   if (!roster) {
     return null;
   }
 
-  const attendanceByStudentRef = new Map(
-    attendanceRecords.map((record) => [record.studentRef, record] as const),
-  );
-
-  const studentsWithAttendance = activeStudents.map((student) => {
-    const attendance = attendanceByStudentRef.get(student._id);
-    return {
-      studentRef: student._id,
-      studentId: student.studentId,
-      rawName: student.rawName,
-      displayName: student.displayName || student.rawName || student.studentId,
-      firstName: student.firstName,
-      lastName: student.lastName,
-      present: attendance?.present ?? false,
-      markedAt: attendance?.markedAt,
-      modifiedAt: attendance?.modifiedAt ?? session.createdAt,
-      lastModifiedAt: attendance?.lastModifiedAt,
-    };
+  const studentsWithAttendance = await loadOpenSessionStudents(ctx, {
+    rosterId: session.rosterId,
+    createdAt: session.createdAt,
+    attendanceRecords,
   });
 
   return {
@@ -66,7 +131,18 @@ async function loadEditorSessionSnapshot(ctx: QueryCtx, token: string) {
     },
     totalCount: studentsWithAttendance.length,
     presentCount: studentsWithAttendance.filter((student) => student.present).length,
-    students: studentsWithAttendance,
+    students: studentsWithAttendance.map((student) => ({
+      studentRef: student.studentRef,
+      studentId: student.studentId,
+      rawName: student.rawName,
+      displayName: student.displayName,
+      firstName: student.firstName,
+      lastName: student.lastName,
+      present: student.present,
+      markedAt: student.markedAt,
+      modifiedAt: student.modifiedAt,
+      lastModifiedAt: student.lastModifiedAt,
+    })),
   };
 }
 
@@ -87,28 +163,11 @@ async function loadSessionExport(ctx: QueryCtx, sessionId: Id<"sessions">) {
     .collect();
 
   const rows = session.isOpen
-    ? (() => {
-        const attendanceByStudentRef = new Map(
-          attendanceRecords.map((record) => [record.studentRef, record] as const),
-        );
-
-        return loadActiveRosterStudents(ctx, session.rosterId).then((activeStudents) =>
-          activeStudents.map((student) => {
-            const attendance = attendanceByStudentRef.get(student._id);
-            return {
-              studentId: student.studentId,
-              rawName: student.rawName,
-              displayName: student.displayName,
-              firstName: student.firstName,
-              lastName: student.lastName,
-              sortKey: student.sortKey,
-              present: attendance?.present ?? false,
-              markedAt: attendance?.markedAt,
-              modifiedAt: attendance?.modifiedAt ?? session.createdAt,
-            };
-          }),
-        );
-      })()
+    ? loadOpenSessionStudents(ctx, {
+        rosterId: session.rosterId,
+        createdAt: session.createdAt,
+        attendanceRecords,
+      })
     : Promise.all(
         attendanceRecords.map(async (record) => {
           const student = await ctx.db.get(record.studentRef);
@@ -241,7 +300,7 @@ export const toggleByEditorToken = mutation({
     }
 
     const student = await ctx.db.get(args.studentRef);
-    if (!student || student.rosterId !== session.rosterId || !student.active) {
+    if (!student || student.rosterId !== session.rosterId) {
       throw new Error("Student not found in this roster.");
     }
 
@@ -253,6 +312,10 @@ export const toggleByEditorToken = mutation({
       .unique();
 
     if (!attendance) {
+      if (!student.active) {
+        throw new Error("Student not found in this roster.");
+      }
+
       await ctx.db.insert("attendance", {
         sessionId: session._id,
         studentRef: student._id,

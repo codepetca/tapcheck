@@ -87,6 +87,52 @@ describe("attendance flow while editing an existing roster", () => {
     });
   });
 
+  it("keeps existing attendance visible when a student is deactivated during an open session", async () => {
+    const { t, rosterId, sessionId, editorToken } = await createRosterAndOpenSession();
+
+    const rosterBeforeImport = await t.query(api.rosters.getById, { rosterId });
+    if (!rosterBeforeImport) {
+      throw new Error("Expected roster to exist.");
+    }
+
+    const alice = rosterBeforeImport.students.find((student) => student.studentId === "1001");
+    if (!alice) {
+      throw new Error("Expected Alice Able to exist in the roster.");
+    }
+
+    await t.mutation(api.attendance.toggleByEditorToken, {
+      token: editorToken,
+      studentRef: alice._id,
+      clientNow: 1_742_000_000_000,
+    });
+
+    await t.mutation(api.rosters.importIntoExisting, {
+      rosterId,
+      name: "Roster A",
+      students: [makeStudent("1002", "John Smith")],
+      deactivateMissing: true,
+    });
+
+    const editorSession = await t.query(api.attendance.getEditorSessionByToken, {
+      token: editorToken,
+    });
+    const exportData = await t.query(api.attendance.getSessionExport, { sessionId });
+
+    expect(editorSession?.students.map((student) => student.studentId)).toEqual(["1001", "1002"]);
+    expect(editorSession?.students.find((student) => student.studentId === "1001")).toMatchObject({
+      studentId: "1001",
+      present: true,
+      markedAt: 1_742_000_000_000,
+    });
+
+    expect(exportData?.rows.map((row) => row.studentId)).toEqual(["1001", "1002"]);
+    expect(exportData?.rows.find((row) => row.studentId === "1001")).toMatchObject({
+      studentId: "1001",
+      present: true,
+      markedAt: 1_742_000_000_000,
+    });
+  });
+
   it("includes a newly added student in the open session collection and export", async () => {
     const { t, rosterId, sessionId, editorToken } = await createRosterAndOpenSession();
 
@@ -156,6 +202,46 @@ describe("attendance flow while editing an existing roster", () => {
       studentId: "1002",
       present: true,
       markedAt: 1_742_000_000_000,
+    });
+  });
+
+  it("allows toggling an existing attendance row after the student is deactivated", async () => {
+    const { t, rosterId, sessionId, editorToken } = await createRosterAndOpenSession();
+
+    const rosterBeforeImport = await t.query(api.rosters.getById, { rosterId });
+    if (!rosterBeforeImport) {
+      throw new Error("Expected roster to exist.");
+    }
+
+    const alice = rosterBeforeImport.students.find((student) => student.studentId === "1001");
+    if (!alice) {
+      throw new Error("Expected Alice Able to exist in the roster.");
+    }
+
+    await t.mutation(api.attendance.toggleByEditorToken, {
+      token: editorToken,
+      studentRef: alice._id,
+      clientNow: 1_742_000_000_000,
+    });
+
+    await t.mutation(api.rosters.importIntoExisting, {
+      rosterId,
+      name: "Roster A",
+      students: [makeStudent("1002", "John Smith")],
+      deactivateMissing: true,
+    });
+
+    await t.mutation(api.attendance.toggleByEditorToken, {
+      token: editorToken,
+      studentRef: alice._id,
+      clientNow: 1_742_000_000_100,
+    });
+
+    const exportData = await t.query(api.attendance.getSessionExport, { sessionId });
+    expect(exportData?.rows.find((row) => row.studentId === "1001")).toMatchObject({
+      studentId: "1001",
+      present: false,
+      modifiedAt: 1_742_000_000_100,
     });
   });
 
