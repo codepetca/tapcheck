@@ -12,6 +12,7 @@ import { Card } from "@/components/ui/card";
 import { Dialog } from "@/components/ui/dialog";
 import { api } from "@/convex/api";
 import type { Id } from "@/convex/model";
+import { getStudentSessionStatus } from "@/lib/roster-status";
 import { buildAbsoluteUrl, buildEditorPath } from "@/lib/session-links";
 
 type SortColumn = "firstName" | "lastName" | "studentId" | "status";
@@ -167,32 +168,24 @@ export default function RosterDetailPage({
     : canShareCsvFile
       ? "Share attendance CSV"
       : "Download attendance CSV";
+  const isSessionExportLoading = latestSession !== null && sessionExport === undefined;
   const attendanceByStudentId = new Map(
     sessionExport?.rows.map((row) => [row.studentId, row.present]) ?? [],
   );
   const students = data.students
     .map((student, index) => {
       const present = attendanceByStudentId.get(student.studentId);
+      const status = getStudentSessionStatus({
+        hasLatestSession: latestSession !== null,
+        isSessionExportLoading,
+        present,
+      });
 
       return {
         ...student,
         originalIndex: index,
-        statusLabel:
-          latestSession && present !== undefined
-            ? present
-              ? "Present"
-              : "Absent"
-            : latestSession
-              ? "Loading"
-              : "No session",
-        statusTone:
-          latestSession && present !== undefined
-            ? present
-              ? "present"
-              : "absent"
-            : latestSession
-              ? "loading"
-              : "none",
+        statusLabel: status.label,
+        statusTone: status.tone,
       };
     })
     .sort((left, right) => {

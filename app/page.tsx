@@ -4,6 +4,7 @@ import { useQuery } from "convex/react";
 import Link from "next/link";
 import { PageShell } from "@/components/page-shell";
 import { api } from "@/convex/api";
+import { getSessionStatusBadge } from "@/lib/roster-status";
 
 function formatDate(timestamp: number) {
   return new Intl.DateTimeFormat(undefined, {
@@ -42,18 +43,7 @@ export default function HomePage() {
           <div className="mt-4 space-y-3">
             {rosters.map((roster) => (
               (() => {
-                const sessionStatus =
-                  roster.hasActiveSession === true
-                    ? {
-                        label: "Active",
-                        className: "bg-emerald-100 text-emerald-800",
-                      }
-                      : roster.sessionCount > 0
-                        ? {
-                            label: "Session status syncing",
-                            className: "bg-amber-100 text-amber-800",
-                          }
-                        : null;
+                const sessionStatus = getSessionStatusBadge(roster.hasActiveSession === true);
 
                 return (
                   <Link
