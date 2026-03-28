@@ -1,5 +1,10 @@
 import { v } from "convex/values";
 import { buildDemoRosterStudents } from "../lib/demo-data";
+import {
+  getAuthenticatedTokenIdentifier,
+  getOwnedRoster,
+  requireOwnedRoster,
+} from "./auth";
 import type { Id } from "./model";
 import { mutation, query, type MutationCtx } from "./server";
 
@@ -124,7 +129,14 @@ export const list = query({
     }),
   ),
   handler: async (ctx) => {
-    const rosters = await ctx.db.query("rosters").order("desc").collect();
+    const ownerTokenIdentifier = await getAuthenticatedTokenIdentifier(ctx);
+    const rosters = await ctx.db
+      .query("rosters")
+      .withIndex("by_ownerTokenIdentifier_and_createdAt", (q) =>
+        q.eq("ownerTokenIdentifier", ownerTokenIdentifier),
+      )
+      .order("desc")
+      .collect();
 
     return Promise.all(
       rosters.map(async (roster) => {
@@ -184,14 +196,13 @@ export const getById = query({
           title: v.string(),
           date: v.string(),
           isOpen: v.boolean(),
-          editorToken: v.string(),
           createdAt: v.number(),
         }),
       ),
     }),
   ),
   handler: async (ctx, args) => {
-    const roster = await ctx.db.get(args.rosterId);
+    const roster = await getOwnedRoster(ctx, args.rosterId);
     if (!roster) {
       return null;
     }
@@ -231,7 +242,6 @@ export const getById = query({
           title: session.title,
           date: session.date,
           isOpen: session.isOpen,
-          editorToken: session.editorToken,
           createdAt: session.createdAt,
         })),
     };
@@ -242,6 +252,7 @@ export const createEmpty = mutation({
   args: { name: v.string() },
   returns: v.id("rosters"),
   handler: async (ctx, args) => {
+    const ownerTokenIdentifier = await getAuthenticatedTokenIdentifier(ctx);
     const name = args.name.trim();
     if (!name) {
       throw new Error("Roster name is required.");
@@ -249,6 +260,7 @@ export const createEmpty = mutation({
 
     return ctx.db.insert("rosters", {
       name,
+      ownerTokenIdentifier,
       createdAt: Date.now(),
     });
   },
@@ -261,6 +273,7 @@ export const importCsv = mutation({
   },
   returns: v.id("rosters"),
   handler: async (ctx, args) => {
+    const ownerTokenIdentifier = await getAuthenticatedTokenIdentifier(ctx);
     const name = args.name.trim();
     if (!name) {
       throw new Error("Roster name is required.");
@@ -270,6 +283,7 @@ export const importCsv = mutation({
 
     const rosterId = await ctx.db.insert("rosters", {
       name,
+      ownerTokenIdentifier,
       createdAt: Date.now(),
     });
 
@@ -297,10 +311,7 @@ export const rename = mutation({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
-    const roster = await ctx.db.get(args.rosterId);
-    if (!roster) {
-      throw new Error("Roster not found.");
-    }
+    await requireOwnedRoster(ctx, args.rosterId);
 
     const name = args.name.trim();
     if (!name) {
@@ -321,10 +332,7 @@ export const importIntoExisting = mutation({
   },
   returns: v.id("rosters"),
   handler: async (ctx, args) => {
-    const roster = await ctx.db.get(args.rosterId);
-    if (!roster) {
-      throw new Error("Roster not found.");
-    }
+    await requireOwnedRoster(ctx, args.rosterId);
 
     const name = args.name.trim();
     if (!name) {
@@ -389,8 +397,10 @@ export const seedDemo = mutation({
   args: {},
   returns: v.id("rosters"),
   handler: async (ctx) => {
+    const ownerTokenIdentifier = await getAuthenticatedTokenIdentifier(ctx);
     const rosterId = await ctx.db.insert("rosters", {
       name: "Grade 8 Homeroom Demo",
+      ownerTokenIdentifier,
       createdAt: Date.now(),
     });
 
@@ -417,10 +427,7 @@ export const remove = mutation({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
-    const roster = await ctx.db.get(args.rosterId);
-    if (!roster) {
-      throw new Error("Roster not found.");
-    }
+    await requireOwnedRoster(ctx, args.rosterId);
 
     const [students, sessions] = await Promise.all([
       loadRosterStudents(ctx, args.rosterId),

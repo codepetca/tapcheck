@@ -103,10 +103,10 @@ export function SessionAttendanceScreen({
             This attendance link is not available.
           </h1>
           <Link
-            href="/"
+            href="/login"
             className="mt-6 inline-flex h-11 items-center justify-center rounded-full border border-slate-300 px-5 text-sm font-medium text-slate-700 transition hover:border-slate-400 hover:text-slate-950"
           >
-            Go to rosters
+            Sign in to manage rosters
           </Link>
         </div>
       </main>

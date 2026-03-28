@@ -1,4 +1,5 @@
 import { v } from "convex/values";
+import { requireOwnedSession } from "./auth";
 import type { Id } from "./model";
 import type { QueryCtx } from "./server";
 import { query, mutation } from "./server";
@@ -274,8 +275,17 @@ export const getEditorSessionByToken = query({
 
 export const getSessionExport = query({
   args: { sessionId: v.id("sessions") },
-  returns: v.union(v.null(), sessionExportResult),
-  handler: async (ctx, args) => loadSessionExport(ctx, args.sessionId),
+  returns: sessionExportResult,
+  handler: async (ctx, args) => {
+    await requireOwnedSession(ctx, args.sessionId);
+    const sessionExport = await loadSessionExport(ctx, args.sessionId);
+
+    if (!sessionExport) {
+      throw new Error("Session not found.");
+    }
+
+    return sessionExport;
+  },
 });
 
 export const toggleByEditorToken = mutation({

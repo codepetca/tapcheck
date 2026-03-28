@@ -8,7 +8,7 @@ Realtime mobile attendance for teachers taking attendance at the classroom door.
 - TypeScript
 - Convex for database, mutations, and live queries
 - Tailwind CSS 4
-- No auth for MVP, access controlled by share tokens
+- WorkOS AuthKit for account login
 
 ## MVP features
 
@@ -61,6 +61,7 @@ lib/
 ### `rosters`
 
 - `name`
+- `ownerTokenIdentifier`
 - `createdAt`
 
 ### `students`
@@ -121,7 +122,20 @@ NEXT_PUBLIC_CONVEX_URL=https://your-deployment.convex.cloud
 
 You can use [.env.local.example](./.env.local.example) as a starting point.
 
-### 3. Run the app
+### 3. Configure auth
+
+Tapcheck uses WorkOS AuthKit for account login and keeps the live attendance editor token-based.
+
+For local development, `pnpm convex:dev` uses [`convex.json`](./convex.json) to provision or sync the dev WorkOS app settings. You still need these environment variables locally:
+
+```bash
+WORKOS_CLIENT_ID=client_...
+WORKOS_API_KEY=sk_...
+WORKOS_COOKIE_PASSWORD=your-32-character-secret
+NEXT_PUBLIC_WORKOS_REDIRECT_URI=http://localhost:3000/auth/callback
+```
+
+### 4. Run the app
 
 In one terminal:
 
@@ -141,12 +155,12 @@ Open [http://localhost:3000](http://localhost:3000).
 
 ### Quick demo
 
-1. Open the home page.
-2. Click `Seed demo roster`.
-3. Open the demo roster.
-4. Create a live session.
-5. Copy the editor and viewer links.
-6. Open both links on different devices or browser windows to verify realtime updates.
+1. Open the home page and sign in with your account.
+2. Create or import a roster.
+3. Open the roster.
+4. Start a live session.
+5. Copy the editor link.
+6. Open that link on another device or browser window to verify realtime updates.
 
 ### CSV import
 
@@ -176,7 +190,8 @@ pnpm build
 
 ## Notes
 
-- There is no authentication in this MVP.
-- Editor and viewer access rely on unguessable share tokens.
+- Roster management, imports, sessions, and exports require an authenticated account.
+- Each roster belongs to one account and is only visible to its owner.
+- The live editor route `/s/edit/[token]` remains token-based and does not require login.
 - Invalid share links show a friendly invalid-link state.
-- The app renders a setup screen until `NEXT_PUBLIC_CONVEX_URL` is configured.
+- The app renders a setup screen until `NEXT_PUBLIC_CONVEX_URL` and the required WorkOS env vars are configured.

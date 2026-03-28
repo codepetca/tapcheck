@@ -4,8 +4,11 @@ import { v } from "convex/values";
 export default defineSchema({
   rosters: defineTable({
     name: v.string(),
+    ownerTokenIdentifier: v.optional(v.string()),
     createdAt: v.number(),
-  }).index("by_createdAt", ["createdAt"]),
+  })
+    .index("by_createdAt", ["createdAt"])
+    .index("by_ownerTokenIdentifier_and_createdAt", ["ownerTokenIdentifier", "createdAt"]),
 
   students: defineTable({
     rosterId: v.id("rosters"),

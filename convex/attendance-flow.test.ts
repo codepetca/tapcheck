@@ -12,6 +12,11 @@ declare global {
 }
 
 const modules = import.meta.glob(["./**/*.ts", "!./**/*.test.ts"]);
+const adminIdentity = {
+  tokenIdentifier: "user|owner-1",
+  email: "owner1@example.com",
+  emailVerified: true,
+};
 
 function makeStudent(studentId: string, displayName: string) {
   const [firstName, ...rest] = displayName.split(" ");
@@ -29,15 +34,17 @@ function makeStudent(studentId: string, displayName: string) {
 
 async function createRosterAndOpenSession() {
   const t = convexTest(schema, modules);
-  const rosterId = await t.mutation(api.rosters.importCsv, {
+  const admin = t.withIdentity(adminIdentity);
+  const rosterId = await admin.mutation(api.rosters.importCsv, {
     name: "Roster A",
     students: [makeStudent("1001", "Alice Able")],
   });
-  const sessionId = await t.mutation(api.sessions.create, {
+  const sessionId = await admin.mutation(api.sessions.create, {
     rosterId,
     date: "2026-03-27",
   });
-  const roster = await t.query(api.rosters.getById, { rosterId });
+  const roster = await admin.query(api.rosters.getById, { rosterId });
+  const editorShare = await admin.query(api.sessions.getEditorLink, { sessionId });
 
   if (!roster) {
     throw new Error("Expected roster to exist.");
@@ -45,17 +52,18 @@ async function createRosterAndOpenSession() {
 
   return {
     t,
+    admin,
     rosterId,
     sessionId,
-    editorToken: roster.sessions[0]?.editorToken ?? "",
+    editorToken: editorShare?.editorToken ?? "",
   };
 }
 
 describe("attendance flow while editing an existing roster", () => {
   it("preserves attendance for an existing student when the roster is re-imported", async () => {
-    const { t, rosterId, sessionId, editorToken } = await createRosterAndOpenSession();
+    const { t, admin, rosterId, sessionId, editorToken } = await createRosterAndOpenSession();
 
-    const rosterBeforeImport = await t.query(api.rosters.getById, { rosterId });
+    const rosterBeforeImport = await admin.query(api.rosters.getById, { rosterId });
     if (!rosterBeforeImport) {
       throw new Error("Expected roster to exist.");
     }
@@ -71,15 +79,15 @@ describe("attendance flow while editing an existing roster", () => {
       clientNow: 1_742_000_000_000,
     });
 
-    await t.mutation(api.rosters.importIntoExisting, {
+    await admin.mutation(api.rosters.importIntoExisting, {
       rosterId,
       name: "Roster A",
       students: [makeStudent("1001", "Alice Updated"), makeStudent("1002", "John Smith")],
       deactivateMissing: false,
     });
 
-    const exportData = await t.query(api.attendance.getSessionExport, { sessionId });
-    expect(exportData?.rows.find((row) => row.studentId === "1001")).toMatchObject({
+    const exportData = await admin.query(api.attendance.getSessionExport, { sessionId });
+    expect(exportData.rows.find((row) => row.studentId === "1001")).toMatchObject({
       studentId: "1001",
       displayName: "Alice Updated",
       present: true,
@@ -88,9 +96,9 @@ describe("attendance flow while editing an existing roster", () => {
   });
 
   it("keeps existing attendance visible when a student is deactivated during an open session", async () => {
-    const { t, rosterId, sessionId, editorToken } = await createRosterAndOpenSession();
+    const { t, admin, rosterId, sessionId, editorToken } = await createRosterAndOpenSession();
 
-    const rosterBeforeImport = await t.query(api.rosters.getById, { rosterId });
+    const rosterBeforeImport = await admin.query(api.rosters.getById, { rosterId });
     if (!rosterBeforeImport) {
       throw new Error("Expected roster to exist.");
     }
@@ -106,7 +114,7 @@ describe("attendance flow while editing an existing roster", () => {
       clientNow: 1_742_000_000_000,
     });
 
-    await t.mutation(api.rosters.importIntoExisting, {
+    await admin.mutation(api.rosters.importIntoExisting, {
       rosterId,
       name: "Roster A",
       students: [makeStudent("1002", "John Smith")],
@@ -116,7 +124,7 @@ describe("attendance flow while editing an existing roster", () => {
     const editorSession = await t.query(api.attendance.getEditorSessionByToken, {
       token: editorToken,
     });
-    const exportData = await t.query(api.attendance.getSessionExport, { sessionId });
+    const exportData = await admin.query(api.attendance.getSessionExport, { sessionId });
 
     expect(editorSession?.students.map((student) => student.studentId)).toEqual(["1001", "1002"]);
     expect(editorSession?.students.find((student) => student.studentId === "1001")).toMatchObject({
@@ -125,8 +133,8 @@ describe("attendance flow while editing an existing roster", () => {
       markedAt: 1_742_000_000_000,
     });
 
-    expect(exportData?.rows.map((row) => row.studentId)).toEqual(["1001", "1002"]);
-    expect(exportData?.rows.find((row) => row.studentId === "1001")).toMatchObject({
+    expect(exportData.rows.map((row) => row.studentId)).toEqual(["1001", "1002"]);
+    expect(exportData.rows.find((row) => row.studentId === "1001")).toMatchObject({
       studentId: "1001",
       present: true,
       markedAt: 1_742_000_000_000,
@@ -134,9 +142,9 @@ describe("attendance flow while editing an existing roster", () => {
   });
 
   it("includes a newly added student in the open session collection and export", async () => {
-    const { t, rosterId, sessionId, editorToken } = await createRosterAndOpenSession();
+    const { t, admin, rosterId, sessionId, editorToken } = await createRosterAndOpenSession();
 
-    await t.mutation(api.rosters.importIntoExisting, {
+    await admin.mutation(api.rosters.importIntoExisting, {
       rosterId,
       name: "Roster A",
       students: [makeStudent("1001", "Alice Able"), makeStudent("1002", "John Smith")],
@@ -146,7 +154,7 @@ describe("attendance flow while editing an existing roster", () => {
     const editorSession = await t.query(api.attendance.getEditorSessionByToken, {
       token: editorToken,
     });
-    const exportData = await t.query(api.attendance.getSessionExport, { sessionId });
+    const exportData = await admin.query(api.attendance.getSessionExport, { sessionId });
 
     expect(editorSession).not.toBeNull();
     expect(editorSession?.totalCount).toBe(2);
@@ -162,9 +170,8 @@ describe("attendance flow while editing an existing roster", () => {
       present: false,
     });
 
-    expect(exportData).not.toBeNull();
-    expect(exportData?.rows.map((row) => row.studentId)).toEqual(["1001", "1002"]);
-    expect(exportData?.rows.find((row) => row.studentId === "1002")).toMatchObject({
+    expect(exportData.rows.map((row) => row.studentId)).toEqual(["1001", "1002"]);
+    expect(exportData.rows.find((row) => row.studentId === "1002")).toMatchObject({
       studentId: "1002",
       displayName: "John Smith",
       present: false,
@@ -172,16 +179,16 @@ describe("attendance flow while editing an existing roster", () => {
   });
 
   it("creates a missing attendance record when the newly added student is first marked present", async () => {
-    const { t, rosterId, sessionId, editorToken } = await createRosterAndOpenSession();
+    const { t, admin, rosterId, sessionId, editorToken } = await createRosterAndOpenSession();
 
-    await t.mutation(api.rosters.importIntoExisting, {
+    await admin.mutation(api.rosters.importIntoExisting, {
       rosterId,
       name: "Roster A",
       students: [makeStudent("1001", "Alice Able"), makeStudent("1002", "John Smith")],
       deactivateMissing: false,
     });
 
-    const roster = await t.query(api.rosters.getById, { rosterId });
+    const roster = await admin.query(api.rosters.getById, { rosterId });
     if (!roster) {
       throw new Error("Expected roster to exist.");
     }
@@ -197,8 +204,8 @@ describe("attendance flow while editing an existing roster", () => {
       clientNow: 1_742_000_000_000,
     });
 
-    const exportData = await t.query(api.attendance.getSessionExport, { sessionId });
-    expect(exportData?.rows.find((row) => row.studentId === "1002")).toMatchObject({
+    const exportData = await admin.query(api.attendance.getSessionExport, { sessionId });
+    expect(exportData.rows.find((row) => row.studentId === "1002")).toMatchObject({
       studentId: "1002",
       present: true,
       markedAt: 1_742_000_000_000,
@@ -206,9 +213,9 @@ describe("attendance flow while editing an existing roster", () => {
   });
 
   it("allows toggling an existing attendance row after the student is deactivated", async () => {
-    const { t, rosterId, sessionId, editorToken } = await createRosterAndOpenSession();
+    const { t, admin, rosterId, sessionId, editorToken } = await createRosterAndOpenSession();
 
-    const rosterBeforeImport = await t.query(api.rosters.getById, { rosterId });
+    const rosterBeforeImport = await admin.query(api.rosters.getById, { rosterId });
     if (!rosterBeforeImport) {
       throw new Error("Expected roster to exist.");
     }
@@ -224,7 +231,7 @@ describe("attendance flow while editing an existing roster", () => {
       clientNow: 1_742_000_000_000,
     });
 
-    await t.mutation(api.rosters.importIntoExisting, {
+    await admin.mutation(api.rosters.importIntoExisting, {
       rosterId,
       name: "Roster A",
       students: [makeStudent("1002", "John Smith")],
@@ -237,8 +244,8 @@ describe("attendance flow while editing an existing roster", () => {
       clientNow: 1_742_000_000_100,
     });
 
-    const exportData = await t.query(api.attendance.getSessionExport, { sessionId });
-    expect(exportData?.rows.find((row) => row.studentId === "1001")).toMatchObject({
+    const exportData = await admin.query(api.attendance.getSessionExport, { sessionId });
+    expect(exportData.rows.find((row) => row.studentId === "1001")).toMatchObject({
       studentId: "1001",
       present: false,
       modifiedAt: 1_742_000_000_100,
@@ -247,7 +254,8 @@ describe("attendance flow while editing an existing roster", () => {
 
   it("rejects imports when the roster already contains duplicate student IDs", async () => {
     const t = convexTest(schema, modules);
-    const rosterId = await t.mutation(api.rosters.importCsv, {
+    const admin = t.withIdentity(adminIdentity);
+    const rosterId = await admin.mutation(api.rosters.importCsv, {
       name: "Roster A",
       students: [makeStudent("1001", "Alice Able")],
     });
@@ -261,7 +269,7 @@ describe("attendance flow while editing an existing roster", () => {
     });
 
     await expect(
-      t.mutation(api.rosters.importIntoExisting, {
+      admin.mutation(api.rosters.importIntoExisting, {
         rosterId,
         name: "Roster A",
         students: [makeStudent("1001", "Alice Able")],

@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import HomePage from "./page";
+import { HomePageContent } from "@/components/home-page-content";
 
 const mockUseQuery = vi.fn();
 
@@ -16,7 +16,7 @@ describe("HomePage", () => {
   it("hides the manage roster section when there are no rosters", () => {
     mockUseQuery.mockReturnValue([]);
 
-    render(<HomePage />);
+    render(<HomePageContent />);
 
     expect(screen.queryByText("Manage a Roster")).not.toBeInTheDocument();
   });
@@ -43,7 +43,7 @@ describe("HomePage", () => {
       },
     ]);
 
-    render(<HomePage />);
+    render(<HomePageContent />);
 
     expect(screen.getByText("Manage a Roster")).toBeInTheDocument();
     expect(screen.getByText("Active")).toBeInTheDocument();

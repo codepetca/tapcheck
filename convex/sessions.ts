@@ -1,7 +1,8 @@
 import { v } from "convex/values";
 import { createShareToken } from "../lib/session-links";
+import { requireOwnedRoster, requireOwnedSession } from "./auth";
 import type { MutationCtx } from "./server";
-import { mutation } from "./server";
+import { mutation, query } from "./server";
 
 async function tokenExists(ctx: MutationCtx, token: string) {
   const editorMatch = await ctx.db
@@ -19,10 +20,7 @@ export const create = mutation({
   },
   returns: v.id("sessions"),
   handler: async (ctx, args) => {
-    const roster = await ctx.db.get(args.rosterId);
-    if (!roster) {
-      throw new Error("Roster not found.");
-    }
+    const roster = await requireOwnedRoster(ctx, args.rosterId);
 
     const existingSessions = await ctx.db
       .query("sessions")
@@ -85,10 +83,7 @@ export const stop = mutation({
   args: { sessionId: v.id("sessions") },
   returns: v.null(),
   handler: async (ctx, args) => {
-    const session = await ctx.db.get(args.sessionId);
-    if (!session) {
-      throw new Error("Session not found.");
-    }
+    const { session } = await requireOwnedSession(ctx, args.sessionId);
 
     if (!session.isOpen) {
       return null;
@@ -103,10 +98,7 @@ export const resume = mutation({
   args: { sessionId: v.id("sessions") },
   returns: v.null(),
   handler: async (ctx, args) => {
-    const session = await ctx.db.get(args.sessionId);
-    if (!session) {
-      throw new Error("Session not found.");
-    }
+    const { session } = await requireOwnedSession(ctx, args.sessionId);
 
     if (session.isOpen) {
       return null;
@@ -123,5 +115,19 @@ export const resume = mutation({
 
     await ctx.db.patch(args.sessionId, { isOpen: true });
     return null;
+  },
+});
+
+export const getEditorLink = query({
+  args: { sessionId: v.id("sessions") },
+  returns: v.object({
+    editorToken: v.string(),
+  }),
+  handler: async (ctx, args) => {
+    const ownedSession = await requireOwnedSession(ctx, args.sessionId);
+
+    return {
+      editorToken: ownedSession.session.editorToken,
+    };
   },
 });

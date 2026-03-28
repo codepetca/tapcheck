@@ -1,8 +1,22 @@
 import { Suspense } from "react";
+import { AuthSetupNotice } from "@/components/auth-setup-notice";
 import { PageShell } from "@/components/page-shell";
 import { RosterImportForm } from "@/components/roster-import-form";
+import { isWorkosConfigured, requireAuthenticatedPage } from "@/lib/workos-auth";
 
-export default function RosterImportPage() {
+export const dynamic = "force-dynamic";
+
+export default async function RosterImportPage() {
+  if (!isWorkosConfigured()) {
+    return (
+      <PageShell title="Import roster" backHref="/">
+        <AuthSetupNotice />
+      </PageShell>
+    );
+  }
+
+  await requireAuthenticatedPage("/rosters/import");
+
   return (
     <PageShell title="Import roster" backHref="/">
       <Suspense
