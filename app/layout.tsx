@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Geist, Sora } from "next/font/google";
+import { AuthKitProvider } from "@workos-inc/authkit-nextjs/components";
 import { ConvexClientProvider } from "@/components/convex-client-provider";
 import "./globals.css";
 
@@ -26,7 +27,9 @@ export default function RootLayout({
   return (
     <html lang="en" className={`${geist.variable} ${sora.variable} h-full`}>
       <body className="min-h-full bg-[linear-gradient(180deg,#eef6f3_0%,#f7f8fb_44%,#ffffff_100%)] font-sans text-slate-950 antialiased">
-        <ConvexClientProvider>{children}</ConvexClientProvider>
+        <AuthKitProvider>
+          <ConvexClientProvider>{children}</ConvexClientProvider>
+        </AuthKitProvider>
       </body>
     </html>
   );
