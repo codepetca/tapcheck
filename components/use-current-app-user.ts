@@ -53,7 +53,7 @@ export function useCurrentAppUser() {
   return {
     currentAppUser,
     isReady:
-      !isAuthLoading && (!isAuthenticated || (currentAppUser !== undefined && currentAppUser !== null)),
+      !isAuthLoading && isAuthenticated && currentAppUser !== undefined && currentAppUser !== null,
     bootstrapError,
   };
 }

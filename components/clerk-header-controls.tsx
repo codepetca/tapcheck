@@ -2,13 +2,12 @@
 
 import { Show, SignInButton, SignUpButton, UserButton } from "@clerk/nextjs";
 import { usePathname } from "next/navigation";
-
-const AUTH_ROUTES = new Set(["/sign-in", "/sign-up"]);
+import { AUTH_ROUTE_PATHS } from "@/lib/auth-routes";
 
 export function ClerkHeaderControls() {
   const pathname = usePathname();
 
-  if (pathname && AUTH_ROUTES.has(pathname)) {
+  if (pathname && AUTH_ROUTE_PATHS.has(pathname)) {
     return null;
   }
 

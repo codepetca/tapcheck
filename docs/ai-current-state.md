@@ -44,6 +44,11 @@ Tapcheck is a mobile-first classroom attendance app. Authenticated staff users c
 - Auth UI should stay minimal and use the existing custom shell around Clerk components rather than a fully headless custom auth build.
 - For UI/UX work, follow `docs/ai-ui-ux.md` as the design guidance source for primitives, composition, spacing, and visual tone.
 
+## Local Worktree Conventions
+
+- Do implementation work from git worktrees under `/Users/stew/Repos/.worktrees/tapcheck/`, not from the hub checkout.
+- For every new worktree, symlink `.env.local` to `/Users/stew/Repos/tapcheck/.env.local` so Clerk and Convex local environment settings stay consistent across worktrees.
+
 ## Testing Harness
 
 - Treat the existing test setup as part of the architecture, not as optional cleanup.

@@ -64,4 +64,17 @@ describe("HomePage", () => {
     expect(screen.getByText("Active")).toBeInTheDocument();
     expect(screen.queryByText("Session status syncing")).not.toBeInTheDocument();
   });
+
+  it("skips the roster query until the current app user bootstrap is ready", () => {
+    mockUseCurrentAppUser.mockReturnValue({
+      currentAppUser: null,
+      isReady: false,
+      bootstrapError: null,
+    });
+    mockUseQuery.mockReturnValue(undefined);
+
+    render(<HomePage />);
+
+    expect(mockUseQuery).toHaveBeenCalledWith(expect.anything(), "skip");
+  });
 });
