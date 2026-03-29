@@ -18,7 +18,7 @@ export default function SignUpPage() {
             navbar: "hidden",
             header: "mb-0 pb-0",
             headerTitle:
-              "font-heading text-3xl font-semibold tracking-tight text-slate-950 text-center",
+              "font-heading !text-4xl !leading-none flex items-center justify-center gap-3 font-semibold tracking-tight text-slate-950 text-center before:block before:size-9 before:shrink-0 before:rounded-xl before:bg-[url('/tapcheck-mark.svg')] before:bg-contain before:bg-center before:bg-no-repeat before:content-['']",
             headerSubtitle: "mt-1 text-center text-sm text-slate-600",
             main: "space-y-0 gap-0 p-0 m-0",
             form: "space-y-0 gap-0 p-0 m-0",

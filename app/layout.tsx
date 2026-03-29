@@ -16,7 +16,7 @@ const sora = Sora({
 });
 
 export const metadata: Metadata = {
-  title: "Tapcheck",
+  title: "TapCheck",
   description: "Realtime mobile attendance for classroom door check-in.",
 };
 
@@ -32,50 +32,50 @@ export default function RootLayout({
           localization={{
             signIn: {
               start: {
-                title: "Tapcheck",
-                titleCombined: "Tapcheck",
+                title: "TapCheck",
+                titleCombined: "TapCheck",
                 subtitle: "Realtime attendance at the door",
                 subtitleCombined: "Realtime attendance at the door",
               },
               password: {
-                title: "Tapcheck",
+                title: "TapCheck",
                 subtitle: "Realtime attendance at the door",
               },
               emailCode: {
-                title: "Tapcheck",
+                title: "TapCheck",
                 subtitle: "Realtime attendance at the door",
                 formTitle: "",
               },
               forgotPassword: {
-                title: "Tapcheck",
+                title: "TapCheck",
                 subtitle: "Realtime attendance at the door",
                 subtitle_email: "Realtime attendance at the door",
                 subtitle_phone: "Realtime attendance at the door",
                 formTitle: "",
               },
               resetPassword: {
-                title: "Tapcheck",
+                title: "TapCheck",
               },
             },
             signUp: {
               start: {
-                title: "Tapcheck",
+                title: "TapCheck",
                 subtitle: "Realtime attendance at the door",
               },
               continue: {
-                title: "Tapcheck",
+                title: "TapCheck",
                 subtitle: "Realtime attendance at the door",
                 actionText: "",
                 actionLink: "",
               },
               emailCode: {
-                title: "Tapcheck",
+                title: "TapCheck",
                 subtitle: "Realtime attendance at the door",
                 formTitle: "",
                 formSubtitle: "",
               },
               emailLink: {
-                title: "Tapcheck",
+                title: "TapCheck",
                 subtitle: "Realtime attendance at the door",
                 formTitle: "",
                 formSubtitle: "",
