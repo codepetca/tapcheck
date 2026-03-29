@@ -11,3 +11,7 @@ When working on Convex code, **always read `convex/_generated/ai/guidelines.md` 
 
 Convex agent skills for common tasks can be installed by running `npx convex ai-files install`.
 <!-- convex-ai-end -->
+
+Always preserve the internal auth model of `app_users` + `auth_identities` with roster ownership via `rosters.ownerAppUserId` unless the task explicitly changes auth architecture.
+Prefer evidence-based implementations: inspect the existing code and tests before changing architecture, extend the current test harness with each substantive behavior change, and validate claims with local verification instead of assumptions.
+For UI work, preserve the existing minimal Tapcheck aesthetic, prefer primitive components and composable layouts over bespoke one-off markup, and read `docs/ai-ui-ux.md` before making substantial visual changes.

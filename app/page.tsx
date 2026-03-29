@@ -3,6 +3,7 @@
 import { useQuery } from "convex/react";
 import Link from "next/link";
 import { PageShell } from "@/components/page-shell";
+import { useCurrentAppUser } from "@/components/use-current-app-user";
 import { api } from "@/convex/api";
 import { getSessionStatusBadge } from "@/lib/roster-status";
 
@@ -15,7 +16,26 @@ function formatDate(timestamp: number) {
 }
 
 export default function HomePage() {
-  const rosters = useQuery(api.rosters.list, {});
+  const { bootstrapError, isReady } = useCurrentAppUser();
+  const rosters = useQuery(api.rosters.list, isReady ? {} : "skip");
+
+  if (bootstrapError) {
+    return (
+      <PageShell title="Tapcheck" subtitle="Mobile-first attendance taking">
+        <section className="rounded-[28px] border border-rose-200 bg-rose-50/90 px-5 py-6 text-sm text-rose-800 shadow-sm">
+          {bootstrapError}
+        </section>
+      </PageShell>
+    );
+  }
+
+  if (!isReady) {
+    return (
+      <PageShell title="Tapcheck" subtitle="Mobile-first attendance taking">
+        <div className="h-40 animate-pulse rounded-[28px] bg-white/80" />
+      </PageShell>
+    );
+  }
 
   return (
     <PageShell title="Tapcheck" subtitle="Mobile-first attendance taking">

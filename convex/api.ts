@@ -1,9 +1,11 @@
 import { anyApi, type ApiFromModules } from "convex/server";
+import type * as appUsers from "./appUsers";
 import type * as attendance from "./attendance";
 import type * as rosters from "./rosters";
 import type * as sessions from "./sessions";
 
 type AppApi = ApiFromModules<{
+  appUsers: typeof appUsers;
   attendance: typeof attendance;
   rosters: typeof rosters;
   sessions: typeof sessions;

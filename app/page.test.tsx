@@ -3,14 +3,29 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import HomePage from "./page";
 
 const mockUseQuery = vi.fn();
+const mockUseCurrentAppUser = vi.fn();
 
 vi.mock("convex/react", () => ({
   useQuery: (...args: unknown[]) => mockUseQuery(...args),
 }));
 
+vi.mock("@/components/use-current-app-user", () => ({
+  useCurrentAppUser: () => mockUseCurrentAppUser(),
+}));
+
 describe("HomePage", () => {
   beforeEach(() => {
     mockUseQuery.mockReset();
+    mockUseCurrentAppUser.mockReset();
+    mockUseCurrentAppUser.mockReturnValue({
+      currentAppUser: {
+        _id: "app-user-1",
+        displayName: "Teacher One",
+        createdAt: 1710000000000,
+      },
+      isReady: true,
+      bootstrapError: null,
+    });
   });
 
   it("hides the manage roster section when there are no rosters", () => {

@@ -7,12 +7,21 @@ Realtime mobile attendance for teachers taking attendance at the classroom door.
 - Next.js 16 App Router
 - TypeScript
 - Convex for database, mutations, and live queries
+- Clerk for authentication
 - Tailwind CSS 4
-- No auth for MVP, access controlled by share tokens
 
-## MVP features
+## Auth model
+
+- Clerk handles sign-in, sign-up, password auth, and Google OAuth
+- Tapcheck keeps internal `app_users` and `auth_identities` tables
+- Each roster is owned by one internal app user
+- Dashboard and roster management routes require authentication
+- Session editor token routes such as `/s/edit/[token]` stay public
+
+## Features
 
 - Roster list and roster detail pages
+- Per-user roster isolation
 - CSV import flow with:
   - file upload
   - column mapping for name and student ID
@@ -20,36 +29,37 @@ Realtime mobile attendance for teachers taking attendance at the classroom door.
   - duplicate student ID warnings
 - Demo roster seeding for quick testing
 - Attendance sessions created from a roster
-- Two share links per session:
-  - editor link for live attendance updates
-  - viewer link for readonly live view
+- One session editor link per roster session for live attendance updates
 - Mobile-first editor screen with:
   - full-row tap targets
   - search
   - hide-present toggle
   - split sections for `Not Yet Marked` and `Present`
-  - optimistic UI feel
-- Realtime viewer screen powered by Convex subscriptions
 
 ## Project structure
 
 ```text
 app/
+  sign-in/[[...sign-in]]/page.tsx    Clerk sign-in
+  sign-up/[[...sign-up]]/page.tsx    Clerk sign-up
   page.tsx                           roster list
   rosters/import/page.tsx            CSV import
   rosters/[rosterId]/page.tsx        roster detail
-  rosters/[rosterId]/sessions/new    session creation
-  sessions/[sessionId]/share         share links
   s/edit/[token]/page.tsx            live editor screen
-  s/view/[token]/page.tsx            readonly viewer screen
 components/
+  auth-shell.tsx
+  clerk-header-controls.tsx
   roster-import-form.tsx
   session-attendance-screen.tsx
+  use-current-app-user.ts
 convex/
-  schema.ts
-  rosters.ts
-  sessions.ts
+  appUsers.ts
+  auth.config.ts
+  auth.ts
   attendance.ts
+  rosters.ts
+  schema.ts
+  sessions.ts
 lib/
   students.ts                        CSV parsing + normalization rules
   demo-data.ts
@@ -58,8 +68,25 @@ lib/
 
 ## Data model
 
+### `app_users`
+
+- `displayName`
+- `createdAt`
+
+### `auth_identities`
+
+- `appUserId`
+- `provider`
+- `providerSubject`
+- `tokenIdentifier`
+- `email`
+- `name`
+- `createdAt`
+- `updatedAt`
+
 ### `rosters`
 
+- `ownerAppUserId`
 - `name`
 - `createdAt`
 
@@ -81,7 +108,6 @@ lib/
 - `date`
 - `isOpen`
 - `editorToken`
-- `viewerToken`
 - `createdAt`
 
 ### `attendance`
@@ -95,7 +121,7 @@ lib/
 - `modifiedAt`
 - `modifiedViaTokenType`
 
-This MVP uses one attendance record per student per session.
+This app uses one attendance record per student per session.
 
 ## Setup
 
@@ -105,7 +131,7 @@ This MVP uses one attendance record per student per session.
 pnpm install
 ```
 
-### 2. Configure Convex
+### 2. Configure Clerk and Convex
 
 Start Convex development once and follow the CLI prompts to create or select a deployment:
 
@@ -113,13 +139,20 @@ Start Convex development once and follow the CLI prompts to create or select a d
 pnpm convex:dev
 ```
 
-In most setups, Convex writes the needed values into `.env.local`. If it does not, add at least:
+Add these values to `.env.local` if the CLIs do not write them for you:
 
 ```bash
 NEXT_PUBLIC_CONVEX_URL=https://your-deployment.convex.cloud
+NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_your_publishable_key
+CLERK_SECRET_KEY=sk_test_your_secret_key
+CLERK_JWT_ISSUER_DOMAIN=https://your-instance.clerk.accounts.dev
+NEXT_PUBLIC_CLERK_SIGN_IN_URL=/sign-in
+NEXT_PUBLIC_CLERK_SIGN_UP_URL=/sign-up
 ```
 
 You can use [.env.local.example](./.env.local.example) as a starting point.
+
+Set `CLERK_JWT_ISSUER_DOMAIN` in the Convex deployment environment as well so Convex can validate Clerk-issued JWTs.
 
 ### 3. Run the app
 
@@ -139,18 +172,16 @@ Open [http://localhost:3000](http://localhost:3000).
 
 ## Usage
 
-### Quick demo
+### First sign-in
 
-1. Open the home page.
-2. Click `Seed demo roster`.
-3. Open the demo roster.
-4. Create a live session.
-5. Copy the editor and viewer links.
-6. Open both links on different devices or browser windows to verify realtime updates.
+1. Open `/sign-up`.
+2. Create a Clerk account.
+3. Return to the dashboard and confirm you can create a roster.
+4. Open another browser profile or incognito window with a different account to verify the first roster is hidden there.
 
 ### CSV import
 
-1. Go to `Import SchoolCash CSV`.
+1. Sign in and go to `Import roster`.
 2. Upload the exported CSV.
 3. Choose the name column and student ID column.
 4. Review the preview.
@@ -170,13 +201,14 @@ Open [http://localhost:3000](http://localhost:3000).
 
 ```bash
 pnpm lint
+pnpm test
 pnpm typecheck
 pnpm build
 ```
 
 ## Notes
 
-- There is no authentication in this MVP.
-- Editor and viewer access rely on unguessable share tokens.
+- Dashboard access requires Clerk authentication.
+- Public session editing still relies on unguessable editor tokens.
 - Invalid share links show a friendly invalid-link state.
 - The app renders a setup screen until `NEXT_PUBLIC_CONVEX_URL` is configured.

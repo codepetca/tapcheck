@@ -8,6 +8,7 @@ import { useRouter } from "next/navigation";
 import { use, useEffect, useState } from "react";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { PageShell } from "@/components/page-shell";
+import { useCurrentAppUser } from "@/components/use-current-app-user";
 import { Card } from "@/components/ui/card";
 import { Dialog } from "@/components/ui/dialog";
 import { api } from "@/convex/api";
@@ -52,9 +53,11 @@ export default function RosterDetailPage({
 }) {
   const resolved = use(params);
   const router = useRouter();
-  const data = useQuery(api.rosters.getById, {
-    rosterId: resolved.rosterId as Id<"rosters">,
-  });
+  const { bootstrapError, isReady } = useCurrentAppUser();
+  const data = useQuery(
+    api.rosters.getById,
+    isReady ? { rosterId: resolved.rosterId as Id<"rosters"> } : "skip",
+  );
   const renameRoster = useMutation(api.rosters.rename);
   const deleteRoster = useMutation(api.rosters.remove);
   const createSession = useMutation(api.sessions.create);
@@ -80,7 +83,7 @@ export default function RosterDetailPage({
   const latestSessionId = data && data !== null ? (data.sessions[0]?._id ?? null) : null;
   const sessionExport = useQuery(
     api.attendance.getSessionExport,
-    latestSessionId ? { sessionId: latestSessionId } : "skip",
+    isReady && latestSessionId ? { sessionId: latestSessionId } : "skip",
   );
 
   useEffect(() => {
@@ -123,7 +126,17 @@ export default function RosterDetailPage({
     );
   }, []);
 
-  if (data === undefined) {
+  if (bootstrapError) {
+    return (
+      <PageShell title="Roster" backHref="/">
+        <div className="rounded-[28px] border border-rose-200 bg-rose-50/90 px-5 py-8 text-sm text-rose-800 shadow-sm">
+          {bootstrapError}
+        </div>
+      </PageShell>
+    );
+  }
+
+  if (!isReady || data === undefined) {
     return (
       <PageShell title="Roster" backHref="/">
         <div className="h-40 animate-pulse rounded-[28px] bg-white/80" />

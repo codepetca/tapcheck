@@ -1,4 +1,5 @@
 import { v } from "convex/values";
+import { getCurrentAppUserWithIdentity } from "./auth";
 import type { Id } from "./model";
 import type { QueryCtx } from "./server";
 import { query, mutation } from "./server";
@@ -275,7 +276,23 @@ export const getEditorSessionByToken = query({
 export const getSessionExport = query({
   args: { sessionId: v.id("sessions") },
   returns: v.union(v.null(), sessionExportResult),
-  handler: async (ctx, args) => loadSessionExport(ctx, args.sessionId),
+  handler: async (ctx, args) => {
+    const [{ appUser }, session] = await Promise.all([
+      getCurrentAppUserWithIdentity(ctx),
+      ctx.db.get(args.sessionId),
+    ]);
+
+    if (!appUser || !session) {
+      return null;
+    }
+
+    const roster = await ctx.db.get(session.rosterId);
+    if (!roster || !roster.ownerAppUserId || roster.ownerAppUserId !== appUser._id) {
+      return null;
+    }
+
+    return loadSessionExport(ctx, args.sessionId);
+  },
 });
 
 export const toggleByEditorToken = mutation({

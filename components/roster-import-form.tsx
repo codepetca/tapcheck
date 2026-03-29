@@ -5,6 +5,7 @@ import { useMutation, useQuery } from "convex/react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { ConfirmDialog } from "@/components/confirm-dialog";
+import { useCurrentAppUser } from "@/components/use-current-app-user";
 import { api } from "@/convex/api";
 import type { Id } from "@/convex/model";
 import { generateRosterName } from "@/lib/roster-names";
@@ -96,6 +97,7 @@ function buildExistingRosterText(
 }
 
 export function RosterImportForm() {
+  const { bootstrapError, isReady } = useCurrentAppUser();
   const searchParams = useSearchParams();
   const router = useRouter();
   const importCsv = useMutation(api.rosters.importCsv);
@@ -104,7 +106,7 @@ export function RosterImportForm() {
   const existingRosterId = rosterIdParam as Id<"rosters"> | null;
   const existingRoster = useQuery(
     api.rosters.getById,
-    existingRosterId ? { rosterId: existingRosterId } : "skip",
+    isReady && existingRosterId ? { rosterId: existingRosterId } : "skip",
   );
 
   const [rosterName, setRosterName] = useState("");
@@ -210,6 +212,18 @@ export function RosterImportForm() {
     rosterNameTouched,
     seededExistingRosterId,
   ]);
+
+  if (bootstrapError) {
+    return (
+      <div className="rounded-[28px] border border-rose-200 bg-rose-50/90 px-5 py-6 text-sm text-rose-800 shadow-sm">
+        {bootstrapError}
+      </div>
+    );
+  }
+
+  if (!isReady) {
+    return <div className="h-64 animate-pulse rounded-[28px] border border-white/70 bg-white/90" />;
+  }
 
   function applyMapping(
     nextMapping: ColumnMapping,

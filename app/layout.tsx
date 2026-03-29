@@ -1,5 +1,7 @@
+import { ClerkProvider } from "@clerk/nextjs";
 import type { Metadata } from "next";
 import { Geist, Sora } from "next/font/google";
+import { ClerkHeaderControls } from "@/components/clerk-header-controls";
 import { ConvexClientProvider } from "@/components/convex-client-provider";
 import "./globals.css";
 
@@ -14,7 +16,7 @@ const sora = Sora({
 });
 
 export const metadata: Metadata = {
-  title: "Tapcheck",
+  title: "TapCheck",
   description: "Realtime mobile attendance for classroom door check-in.",
 };
 
@@ -26,7 +28,68 @@ export default function RootLayout({
   return (
     <html lang="en" className={`${geist.variable} ${sora.variable} h-full`}>
       <body className="min-h-full bg-[linear-gradient(180deg,#eef6f3_0%,#f7f8fb_44%,#ffffff_100%)] font-sans text-slate-950 antialiased">
-        <ConvexClientProvider>{children}</ConvexClientProvider>
+        <ClerkProvider
+          localization={{
+            signIn: {
+              start: {
+                title: "TapCheck",
+                titleCombined: "TapCheck",
+                subtitle: "Realtime attendance at the door",
+                subtitleCombined: "Realtime attendance at the door",
+                actionText: "",
+                actionLink: "Create a new account",
+              },
+              password: {
+                title: "TapCheck",
+                subtitle: "Realtime attendance at the door",
+              },
+              emailCode: {
+                title: "TapCheck",
+                subtitle: "Realtime attendance at the door",
+                formTitle: "",
+              },
+              forgotPassword: {
+                title: "TapCheck",
+                subtitle: "Realtime attendance at the door",
+                subtitle_email: "Realtime attendance at the door",
+                subtitle_phone: "Realtime attendance at the door",
+                formTitle: "",
+              },
+              resetPassword: {
+                title: "TapCheck",
+              },
+            },
+            signUp: {
+              start: {
+                title: "TapCheck",
+                subtitle: "Realtime attendance at the door",
+                actionText: "",
+                actionLink: "Sign in",
+              },
+              continue: {
+                title: "TapCheck",
+                subtitle: "Realtime attendance at the door",
+                actionText: "",
+                actionLink: "",
+              },
+              emailCode: {
+                title: "TapCheck",
+                subtitle: "Realtime attendance at the door",
+                formTitle: "",
+                formSubtitle: "",
+              },
+              emailLink: {
+                title: "TapCheck",
+                subtitle: "Realtime attendance at the door",
+                formTitle: "",
+                formSubtitle: "",
+              },
+            },
+          }}
+        >
+          <ClerkHeaderControls />
+          <ConvexClientProvider>{children}</ConvexClientProvider>
+        </ClerkProvider>
       </body>
     </html>
   );
