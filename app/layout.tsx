@@ -36,6 +36,8 @@ export default function RootLayout({
                 titleCombined: "TapCheck",
                 subtitle: "Realtime attendance at the door",
                 subtitleCombined: "Realtime attendance at the door",
+                actionText: "",
+                actionLink: "Create a new account",
               },
               password: {
                 title: "TapCheck",
@@ -61,6 +63,8 @@ export default function RootLayout({
               start: {
                 title: "TapCheck",
                 subtitle: "Realtime attendance at the door",
+                actionText: "",
+                actionLink: "Sign in",
               },
               continue: {
                 title: "TapCheck",
