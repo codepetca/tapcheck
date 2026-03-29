@@ -9,7 +9,9 @@
  */
 
 import type * as api_ from "../api.js";
+import type * as appUsers from "../appUsers.js";
 import type * as attendance from "../attendance.js";
+import type * as auth from "../auth.js";
 import type * as model from "../model.js";
 import type * as rosters from "../rosters.js";
 import type * as server from "../server.js";
@@ -23,7 +25,9 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   api: typeof api_;
+  appUsers: typeof appUsers;
   attendance: typeof attendance;
+  auth: typeof auth;
   model: typeof model;
   rosters: typeof rosters;
   server: typeof server;

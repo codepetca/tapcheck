@@ -1,5 +1,6 @@
 import { v } from "convex/values";
 import { buildDemoRosterStudents } from "../lib/demo-data";
+import { ensureCurrentAppUser, requireCurrentAppUser, requireOwnedRoster } from "./auth";
 import type { Id } from "./model";
 import { mutation, query, type MutationCtx } from "./server";
 
@@ -124,7 +125,12 @@ export const list = query({
     }),
   ),
   handler: async (ctx) => {
-    const rosters = await ctx.db.query("rosters").order("desc").collect();
+    const { appUser } = await requireCurrentAppUser(ctx);
+    const rosters = await ctx.db
+      .query("rosters")
+      .withIndex("by_ownerAppUserId_createdAt", (q) => q.eq("ownerAppUserId", appUser._id))
+      .order("desc")
+      .collect();
 
     return Promise.all(
       rosters.map(async (roster) => {
@@ -191,8 +197,9 @@ export const getById = query({
     }),
   ),
   handler: async (ctx, args) => {
+    const { appUser } = await requireCurrentAppUser(ctx);
     const roster = await ctx.db.get(args.rosterId);
-    if (!roster) {
+    if (!roster || !roster.ownerAppUserId || roster.ownerAppUserId !== appUser._id) {
       return null;
     }
 
@@ -242,12 +249,14 @@ export const createEmpty = mutation({
   args: { name: v.string() },
   returns: v.id("rosters"),
   handler: async (ctx, args) => {
+    const currentUser = await ensureCurrentAppUser(ctx);
     const name = args.name.trim();
     if (!name) {
       throw new Error("Roster name is required.");
     }
 
     return ctx.db.insert("rosters", {
+      ownerAppUserId: currentUser._id,
       name,
       createdAt: Date.now(),
     });
@@ -261,6 +270,7 @@ export const importCsv = mutation({
   },
   returns: v.id("rosters"),
   handler: async (ctx, args) => {
+    const currentUser = await ensureCurrentAppUser(ctx);
     const name = args.name.trim();
     if (!name) {
       throw new Error("Roster name is required.");
@@ -269,6 +279,7 @@ export const importCsv = mutation({
     validateImportedStudents(args.students);
 
     const rosterId = await ctx.db.insert("rosters", {
+      ownerAppUserId: currentUser._id,
       name,
       createdAt: Date.now(),
     });
@@ -297,10 +308,7 @@ export const rename = mutation({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
-    const roster = await ctx.db.get(args.rosterId);
-    if (!roster) {
-      throw new Error("Roster not found.");
-    }
+    await requireOwnedRoster(ctx, args.rosterId);
 
     const name = args.name.trim();
     if (!name) {
@@ -321,10 +329,7 @@ export const importIntoExisting = mutation({
   },
   returns: v.id("rosters"),
   handler: async (ctx, args) => {
-    const roster = await ctx.db.get(args.rosterId);
-    if (!roster) {
-      throw new Error("Roster not found.");
-    }
+    await requireOwnedRoster(ctx, args.rosterId);
 
     const name = args.name.trim();
     if (!name) {
@@ -389,7 +394,9 @@ export const seedDemo = mutation({
   args: {},
   returns: v.id("rosters"),
   handler: async (ctx) => {
+    const currentUser = await ensureCurrentAppUser(ctx);
     const rosterId = await ctx.db.insert("rosters", {
+      ownerAppUserId: currentUser._id,
       name: "Grade 8 Homeroom Demo",
       createdAt: Date.now(),
     });
@@ -417,10 +424,7 @@ export const remove = mutation({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
-    const roster = await ctx.db.get(args.rosterId);
-    if (!roster) {
-      throw new Error("Roster not found.");
-    }
+    await requireOwnedRoster(ctx, args.rosterId);
 
     const [students, sessions] = await Promise.all([
       loadRosterStudents(ctx, args.rosterId),

@@ -2,10 +2,32 @@ import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 
 export default defineSchema({
-  rosters: defineTable({
-    name: v.string(),
+  app_users: defineTable({
+    displayName: v.string(),
     createdAt: v.number(),
   }).index("by_createdAt", ["createdAt"]),
+
+  auth_identities: defineTable({
+    appUserId: v.id("app_users"),
+    provider: v.literal("clerk"),
+    providerSubject: v.string(),
+    tokenIdentifier: v.string(),
+    email: v.optional(v.string()),
+    name: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_tokenIdentifier", ["tokenIdentifier"])
+    .index("by_provider_and_providerSubject", ["provider", "providerSubject"])
+    .index("by_appUserId", ["appUserId"]),
+
+  rosters: defineTable({
+    ownerAppUserId: v.optional(v.id("app_users")),
+    name: v.string(),
+    createdAt: v.number(),
+  })
+    .index("by_createdAt", ["createdAt"])
+    .index("by_ownerAppUserId_createdAt", ["ownerAppUserId", "createdAt"]),
 
   students: defineTable({
     rosterId: v.id("rosters"),

@@ -1,5 +1,6 @@
 import { v } from "convex/values";
 import { createShareToken } from "../lib/session-links";
+import { requireOwnedRoster } from "./auth";
 import type { MutationCtx } from "./server";
 import { mutation } from "./server";
 
@@ -19,10 +20,7 @@ export const create = mutation({
   },
   returns: v.id("sessions"),
   handler: async (ctx, args) => {
-    const roster = await ctx.db.get(args.rosterId);
-    if (!roster) {
-      throw new Error("Roster not found.");
-    }
+    const { roster } = await requireOwnedRoster(ctx, args.rosterId);
 
     const existingSessions = await ctx.db
       .query("sessions")
@@ -90,6 +88,8 @@ export const stop = mutation({
       throw new Error("Session not found.");
     }
 
+    await requireOwnedRoster(ctx, session.rosterId);
+
     if (!session.isOpen) {
       return null;
     }
@@ -107,6 +107,8 @@ export const resume = mutation({
     if (!session) {
       throw new Error("Session not found.");
     }
+
+    await requireOwnedRoster(ctx, session.rosterId);
 
     if (session.isOpen) {
       return null;
