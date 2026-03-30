@@ -86,6 +86,8 @@ describe("SessionAttendanceScreen", () => {
 
     const aliceRow = screen.getByText("Alice").closest("button");
     expect(aliceRow).not.toBeNull();
+    expect(screen.getByRole("heading", { name: "Homeroom" })).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Search name or student ID")).toBeInTheDocument();
     expect(within(aliceRow!).getByText(timeLabel)).toBeInTheDocument();
     expect(within(aliceRow!).queryByText(/^Present/)).not.toBeInTheDocument();
     expect(screen.getByLabelText("1 of 2 students marked present")).toBeInTheDocument();

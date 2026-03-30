@@ -6,6 +6,7 @@ import Link from "next/link";
 import type { Dispatch, SetStateAction } from "react";
 import { useDeferredValue, useState } from "react";
 import { PresentTotalPill } from "@/components/present-total-pill";
+import { Card } from "@/components/ui/card";
 import { api } from "@/convex/api";
 import type { Id } from "@/convex/model";
 import { cn } from "@/lib/cn";
@@ -208,41 +209,42 @@ export function SessionAttendanceScreen({
 
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-3xl flex-col px-3 py-3 sm:px-6">
-      <div className="rounded-[30px] border border-emerald-100 bg-[linear-gradient(180deg,#ffffff_0%,#f2fbf7_100%)] px-4 py-4 shadow-sm ring-1 ring-slate-950/5">
+      <Card className="rounded-[30px] border-emerald-100 bg-[linear-gradient(180deg,#ffffff_0%,#f2fbf7_100%)] px-4 py-4">
         <h1 className="font-heading truncate text-center text-xl font-semibold tracking-tight text-slate-950 sm:text-2xl">
           {session.session.title}
         </h1>
-        <div className="mt-4 flex items-stretch gap-3">
-          <div className="relative min-w-0 flex-1">
-            <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-            <input
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder="Search name or student ID"
-              className="h-12 w-full rounded-2xl border border-slate-300 bg-white pl-11 pr-12 text-base text-slate-950 outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
-            />
-            {search ? (
-              <button
-                type="button"
-                onClick={() => setSearch("")}
-                aria-label="Clear search"
-                className="absolute right-2 top-1/2 inline-flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            ) : null}
-          </div>
-          <PresentTotalPill presentCount={session.presentCount} totalCount={session.totalCount} />
-        </div>
-        {error ? (
-          <p className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
-            {error}
-          </p>
-        ) : null}
-      </div>
+      </Card>
 
-      <div className="sticky top-0 z-10 mt-4 bg-[linear-gradient(180deg,#eef6f3_0%,#f7f8fb_44%,#ffffff_100%)] py-2">
-        <div className="px-4 py-0">
+      <div className="sticky top-3 z-10 mt-4">
+        <Card className="rounded-[30px] bg-white px-4 py-4">
+          <div className="flex items-stretch gap-3">
+            <div className="relative min-w-0 flex-1">
+              <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+              <input
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder="Search name or student ID"
+                className="h-12 w-full rounded-2xl border border-slate-300 bg-white pl-11 pr-12 text-base text-slate-950 outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
+              />
+              {search ? (
+                <button
+                  type="button"
+                  onClick={() => setSearch("")}
+                  aria-label="Clear search"
+                  className="absolute right-2 top-1/2 inline-flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              ) : null}
+            </div>
+            <PresentTotalPill presentCount={session.presentCount} totalCount={session.totalCount} />
+          </div>
+          {error ? (
+            <p className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+              {error}
+            </p>
+          ) : null}
+          <div className="mt-4">
           <div
             className="grid items-center gap-3 px-2 text-left font-semibold uppercase tracking-[0.16em]"
             style={{ gridTemplateColumns: studentGridTemplateColumns }}
@@ -278,10 +280,11 @@ export function SessionAttendanceScreen({
                   : "border-transparent text-base text-slate-500 hover:text-slate-950"
               }`}
             >
-              Student ID
+              ID
             </button>
           </div>
-        </div>
+          </div>
+        </Card>
       </div>
 
       <section className="mt-4">

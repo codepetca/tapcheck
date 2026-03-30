@@ -736,54 +736,54 @@ export default function RosterDetailPage({
           <table className="min-w-full divide-y divide-slate-200 text-left text-sm">
             <thead className="sticky top-0 bg-slate-50">
               <tr>
-                <th className="px-4 py-3 font-medium text-slate-600">
+                <th
+                  className={`px-4 py-3 font-medium ${
+                    sortColumn === "firstName" ? "bg-slate-200 text-slate-950" : "text-slate-600"
+                  }`}
+                >
                   <button
                     type="button"
                     onClick={() => toggleSort("firstName")}
-                    className={`rounded-full px-3 py-1 transition ${
-                      sortColumn === "firstName"
-                        ? "bg-slate-200 text-slate-950"
-                        : "text-slate-600 hover:bg-slate-100 hover:text-slate-950"
-                    }`}
+                    className="w-full py-1 text-left transition hover:text-slate-950"
                   >
                     First
                   </button>
                 </th>
-                <th className="px-4 py-3 font-medium text-slate-600">
+                <th
+                  className={`px-4 py-3 font-medium ${
+                    sortColumn === "lastName" ? "bg-slate-200 text-slate-950" : "text-slate-600"
+                  }`}
+                >
                   <button
                     type="button"
                     onClick={() => toggleSort("lastName")}
-                    className={`rounded-full px-3 py-1 transition ${
-                      sortColumn === "lastName"
-                        ? "bg-slate-200 text-slate-950"
-                        : "text-slate-600 hover:bg-slate-100 hover:text-slate-950"
-                    }`}
+                    className="w-full py-1 text-left transition hover:text-slate-950"
                   >
                     Last
                   </button>
                 </th>
-                <th className="px-4 py-3 font-medium text-slate-600">
+                <th
+                  className={`px-4 py-3 font-medium ${
+                    sortColumn === "studentId" ? "bg-slate-200 text-slate-950" : "text-slate-600"
+                  }`}
+                >
                   <button
                     type="button"
                     onClick={() => toggleSort("studentId")}
-                    className={`rounded-full px-3 py-1 transition ${
-                      sortColumn === "studentId"
-                        ? "bg-slate-200 text-slate-950"
-                        : "text-slate-600 hover:bg-slate-100 hover:text-slate-950"
-                    }`}
+                    className="w-full py-1 text-left transition hover:text-slate-950"
                   >
                     ID
                   </button>
                 </th>
-                <th className="px-4 py-3 font-medium text-slate-600">
+                <th
+                  className={`px-4 py-3 font-medium ${
+                    sortColumn === "status" ? "bg-slate-200 text-slate-950" : "text-slate-600"
+                  }`}
+                >
                   <button
                     type="button"
                     onClick={() => toggleSort("status")}
-                    className={`rounded-full px-3 py-1 transition ${
-                      sortColumn === "status"
-                        ? "bg-slate-200 text-slate-950"
-                        : "text-slate-600 hover:bg-slate-100 hover:text-slate-950"
-                    }`}
+                    className="w-full py-1 text-left transition hover:text-slate-950"
                   >
                     Status
                   </button>
