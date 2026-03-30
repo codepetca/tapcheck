@@ -1,13 +1,23 @@
 "use client";
 
-import { Check, CircleHelp, Copy, Pencil, Play, Share, Square, User } from "lucide-react";
+import {
+  Check,
+  CircleHelp,
+  ExternalLink,
+  Pencil,
+  Play,
+  Share,
+  Send,
+  Square,
+} from "lucide-react";
 import Papa from "papaparse";
 import { useMutation, useQuery } from "convex/react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { use, useEffect, useState } from "react";
+import { use, useState } from "react";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { PageShell } from "@/components/page-shell";
+import { PresentTotalPill } from "@/components/present-total-pill";
 import { useCurrentAppUser } from "@/components/use-current-app-user";
 import { Card } from "@/components/ui/card";
 import { Dialog } from "@/components/ui/dialog";
@@ -17,7 +27,12 @@ import { getStudentSessionStatus } from "@/lib/roster-status";
 import { buildAbsoluteUrl, buildEditorPath } from "@/lib/session-links";
 
 type SortColumn = "firstName" | "lastName" | "studentId" | "status";
-type SortDirection = "asc" | "desc";
+type StatusSortDirection = "asc" | "desc";
+type NavigatorWithUserAgentData = Navigator & {
+  userAgentData?: {
+    mobile?: boolean;
+  };
+};
 
 function today() {
   const now = new Date();
@@ -44,6 +59,54 @@ function downloadCsvFile(csv: string, fileName: string) {
   link.click();
   link.remove();
   window.URL.revokeObjectURL(url);
+}
+
+function copyTextFallback(text: string) {
+  if (typeof document === "undefined") {
+    return false;
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  textarea.style.pointerEvents = "none";
+  document.body.appendChild(textarea);
+  textarea.select();
+  textarea.setSelectionRange(0, text.length);
+
+  const didCopy = document.execCommand("copy");
+  textarea.remove();
+  return didCopy;
+}
+
+function openCsvInNewTab(csv: string) {
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = window.URL.createObjectURL(blob);
+  const openedWindow = window.open(url, "_blank", "noopener,noreferrer");
+
+  window.setTimeout(() => {
+    window.URL.revokeObjectURL(url);
+  }, 60_000);
+
+  return Boolean(openedWindow);
+}
+
+function shouldUseMobileShareFlow() {
+  if (typeof navigator === "undefined") {
+    return false;
+  }
+
+  const navigatorWithUserAgentData = navigator as NavigatorWithUserAgentData;
+  if (typeof navigatorWithUserAgentData.userAgentData?.mobile === "boolean") {
+    return navigatorWithUserAgentData.userAgentData.mobile;
+  }
+
+  const userAgent = navigator.userAgent;
+  const isTouchMac = /Macintosh/i.test(userAgent) && navigator.maxTouchPoints > 1;
+
+  return /Android|iPhone|iPad|iPod/i.test(userAgent) || isTouchMac;
 }
 
 export default function RosterDetailPage({
@@ -73,58 +136,15 @@ export default function RosterDetailPage({
   const [isStoppingSession, setIsStoppingSession] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [isDeletingRoster, setIsDeletingRoster] = useState(false);
-  const [isStopDialogOpen, setIsStopDialogOpen] = useState(false);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [isHelpDialogOpen, setIsHelpDialogOpen] = useState(false);
-  const [canShareCsvFile, setCanShareCsvFile] = useState(false);
-  const [canShareEditorLink, setCanShareEditorLink] = useState(false);
   const [sortColumn, setSortColumn] = useState<SortColumn>("lastName");
-  const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
+  const [statusSortDirection, setStatusSortDirection] = useState<StatusSortDirection>("desc");
   const latestSessionId = data && data !== null ? (data.sessions[0]?._id ?? null) : null;
   const sessionExport = useQuery(
     api.attendance.getSessionExport,
     isReady && latestSessionId ? { sessionId: latestSessionId } : "skip",
   );
-
-  useEffect(() => {
-    if (typeof navigator === "undefined" || typeof navigator.share !== "function") {
-      setCanShareEditorLink(false);
-      return;
-    }
-
-    const mobileLikeUserAgent = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
-    const coarsePointer =
-      typeof window !== "undefined" &&
-      typeof window.matchMedia === "function" &&
-      window.matchMedia("(pointer: coarse)").matches;
-
-    setCanShareEditorLink(mobileLikeUserAgent || coarsePointer);
-  }, []);
-
-  useEffect(() => {
-    if (
-      typeof navigator === "undefined" ||
-      typeof navigator.share !== "function" ||
-      typeof navigator.canShare !== "function"
-    ) {
-      setCanShareCsvFile(false);
-      return;
-    }
-
-    const probeFile = new File(["attendance"], "attendance.csv", {
-      type: "text/csv;charset=utf-8;",
-    });
-
-    const mobileLikeUserAgent = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
-    const coarsePointer =
-      typeof window !== "undefined" &&
-      typeof window.matchMedia === "function" &&
-      window.matchMedia("(pointer: coarse)").matches;
-
-    setCanShareCsvFile(
-      (mobileLikeUserAgent || coarsePointer) && navigator.canShare({ files: [probeFile] }),
-    );
-  }, []);
 
   if (bootstrapError) {
     return (
@@ -169,18 +189,13 @@ export default function RosterDetailPage({
       ? "Start"
       : "Add students to start";
   const stopControlLabel = isStoppingSession ? "Stopping" : "Stop";
-  const editorLinkControlLabel = canShareEditorLink
-    ? "Send attendance link"
-    : copiedLink
-      ? "Copied collection link"
-      : "Collection link";
+  const openEditorLinkControlLabel = "Open collection link";
+  const shareEditorLinkControlLabel = copiedLink
+    ? "Copied collection link"
+    : "Share or copy collection link";
   const exportControlLabel = isExporting
-    ? canShareCsvFile
-      ? "Opening share sheet"
-      : "Downloading attendance CSV"
-    : canShareCsvFile
-      ? "Share attendance CSV"
-      : "Download attendance CSV";
+    ? "Preparing attendance results"
+    : "Send or download attendance results";
   const isSessionExportLoading = latestSession !== null && sessionExport === undefined;
   const attendanceByStudentId = new Map(
     sessionExport?.rows.map((row) => [row.studentId, row.present]) ?? [],
@@ -202,62 +217,78 @@ export default function RosterDetailPage({
       };
     })
     .sort((left, right) => {
-      const direction = sortDirection === "asc" ? 1 : -1;
+      const compareByStatus = () =>
+        left.statusLabel.localeCompare(right.statusLabel, undefined, { sensitivity: "base" });
+      const compareByLastName = () =>
+        left.lastName.localeCompare(right.lastName, undefined, { sensitivity: "base" });
+      const compareByFirstName = () =>
+        left.firstName.localeCompare(right.firstName, undefined, { sensitivity: "base" });
+      const compareByStudentId = () =>
+        left.studentId.localeCompare(right.studentId, undefined, {
+          sensitivity: "base",
+        });
 
       switch (sortColumn) {
         case "firstName":
           return (
-            left.firstName.localeCompare(right.firstName, undefined, { sensitivity: "base" }) *
-              direction ||
-            left.lastName.localeCompare(right.lastName, undefined, { sensitivity: "base" }) *
-              direction ||
+            compareByFirstName() ||
+            compareByLastName() ||
+            compareByStudentId() ||
+            compareByStatus() ||
             left.originalIndex - right.originalIndex
           );
         case "lastName":
           return (
-            left.lastName.localeCompare(right.lastName, undefined, { sensitivity: "base" }) *
-              direction ||
-            left.firstName.localeCompare(right.firstName, undefined, { sensitivity: "base" }) *
-              direction ||
+            compareByLastName() ||
+            compareByFirstName() ||
+            compareByStudentId() ||
+            compareByStatus() ||
             left.originalIndex - right.originalIndex
           );
         case "studentId":
           return (
-            left.studentId.localeCompare(right.studentId, undefined, { sensitivity: "base" }) *
-              direction ||
+            compareByStudentId() ||
+            compareByLastName() ||
+            compareByFirstName() ||
+            compareByStatus() ||
             left.originalIndex - right.originalIndex
           );
         case "status":
+          if (statusSortDirection === "desc") {
+            return (
+              -compareByStatus() ||
+              compareByLastName() ||
+              compareByFirstName() ||
+              compareByStudentId() ||
+              left.originalIndex - right.originalIndex
+            );
+          }
+
           return (
-            left.statusLabel.localeCompare(right.statusLabel, undefined, { sensitivity: "base" }) *
-              direction ||
-            left.lastName.localeCompare(right.lastName, undefined, { sensitivity: "base" }) *
-              direction ||
-            left.firstName.localeCompare(right.firstName, undefined, { sensitivity: "base" }) *
-              direction ||
+            compareByStatus() ||
+            compareByLastName() ||
+            compareByFirstName() ||
+            compareByStudentId() ||
             left.originalIndex - right.originalIndex
           );
       }
     });
   const presentCount = students.filter((student) => student.statusTone === "present").length;
-  const absentCount = students.filter((student) => student.statusTone === "absent").length;
+  const totalCount = data.students.length;
 
   function toggleSort(nextColumn: SortColumn) {
-    if (sortColumn === nextColumn) {
-      setSortDirection((current) => (current === "asc" ? "desc" : "asc"));
+    if (nextColumn === "status") {
+      if (sortColumn === "status") {
+        setStatusSortDirection((current) => (current === "asc" ? "desc" : "asc"));
+        return;
+      }
+
+      setSortColumn("status");
+      setStatusSortDirection("desc");
       return;
     }
 
     setSortColumn(nextColumn);
-    setSortDirection("asc");
-  }
-
-  function sortIndicator(column: SortColumn) {
-    if (sortColumn !== column) {
-      return " ";
-    }
-
-    return sortDirection === "asc" ? " ↑" : " ↓";
   }
 
   async function handleTitleSave() {
@@ -319,12 +350,23 @@ export default function RosterDetailPage({
     }
   }
 
-  async function handleEditorLinkAction() {
+  function handleOpenEditorLink() {
+    if (!editorUrl || typeof window === "undefined") {
+      return;
+    }
+
+    const openedWindow = window.open(editorUrl, "_blank", "noopener,noreferrer");
+    if (!openedWindow) {
+      void handleShareEditorLinkAction();
+    }
+  }
+
+  async function handleShareEditorLinkAction() {
     if (!editorUrl) {
       return;
     }
 
-    if (canShareEditorLink && typeof navigator !== "undefined" && typeof navigator.share === "function") {
+    if (shouldUseMobileShareFlow() && typeof navigator !== "undefined" && typeof navigator.share === "function") {
       try {
         await navigator.share({
           title: `${roster.name} attendance link`,
@@ -340,7 +382,13 @@ export default function RosterDetailPage({
       return;
     }
 
-    await navigator.clipboard.writeText(editorUrl);
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(editorUrl);
+    } else if (!copyTextFallback(editorUrl)) {
+      window.prompt("Copy this collection link:", editorUrl);
+      return;
+    }
+
     setCopiedLink(true);
     window.setTimeout(() => setCopiedLink(false), 1800);
   }
@@ -354,7 +402,6 @@ export default function RosterDetailPage({
     setIsStoppingSession(true);
     try {
       await stopSession({ sessionId: activeSession._id });
-      setIsStopDialogOpen(false);
     } catch (error) {
       setSessionError(error instanceof Error ? error.message : "Could not stop session.");
     } finally {
@@ -387,6 +434,7 @@ export default function RosterDetailPage({
       });
 
       if (
+        shouldUseMobileShareFlow() &&
         typeof navigator !== "undefined" &&
         typeof navigator.share === "function" &&
         typeof navigator.canShare === "function" &&
@@ -424,7 +472,13 @@ export default function RosterDetailPage({
         }
       }
 
-      downloadCsvFile(csv, fileName);
+      if (shouldUseMobileShareFlow()) {
+        if (!openCsvInNewTab(csv)) {
+          downloadCsvFile(csv, fileName);
+        }
+      } else {
+        downloadCsvFile(csv, fileName);
+      }
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") {
         return;
@@ -525,16 +579,6 @@ export default function RosterDetailPage({
       backHref="/"
     >
       <ConfirmDialog
-        open={isStopDialogOpen}
-        title="Stop Session?"
-        description="You can resume it later."
-        confirmLabel="Stop session"
-        tone="danger"
-        busy={isStoppingSession}
-        onConfirm={() => void handleStopSession()}
-        onCancel={() => setIsStopDialogOpen(false)}
-      />
-      <ConfirmDialog
         open={isDeleteDialogOpen}
         title="Delete Roster?"
         description={`Delete roster "${roster.name}"? This permanently removes its students, session, and attendance records.`}
@@ -547,27 +591,43 @@ export default function RosterDetailPage({
       <Dialog open={isHelpDialogOpen} onClose={() => setIsHelpDialogOpen(false)}>
         <Card className="w-full border border-white/70 bg-white shadow-xl ring-0">
           <h2 className="font-heading text-xl font-semibold tracking-tight text-slate-950">
-            How Attendance Sharing Works
+            How to Take Attendance
           </h2>
           <div className="mt-4 space-y-3 text-sm leading-6 text-slate-600">
             <p>
-              1. Tap <span className="font-semibold text-slate-950">Start</span>.
+              1. Tap{" "}
+              <span className="inline-flex items-center gap-1 font-semibold text-slate-950">
+                <span>Start</span>
+                <Play aria-hidden="true" className="h-4 w-4 fill-current text-emerald-700" />
+              </span>
+              .
             </p>
             <p>
-              2. Share the <span className="font-semibold text-slate-950">Collection Link</span>.
+              2. Open the collection{" "}
+              <span className="inline-flex items-center gap-1 font-semibold text-slate-950">
+                <span>link</span>
+                <ExternalLink aria-hidden="true" className="h-4 w-4 text-emerald-700" />
+              </span>{" "}
+              or{" "}
+              <span className="inline-flex items-center gap-1 font-semibold text-slate-950">
+                <span>share</span>
+                <Share aria-hidden="true" className="h-4 w-4 text-emerald-700" />
+              </span>{" "}
+              it with whoever is taking attendance.
             </p>
             <p>
-              3. Take attendance.
+              3. When finished, tap{" "}
+              <span className="inline-flex items-center gap-1 font-semibold text-slate-950">
+                <span>Stop</span>
+                <Square aria-hidden="true" className="h-4 w-4 fill-current text-rose-600" />
+              </span>{" "}
+              and send attendance{" "}
+              <span className="inline-flex items-center gap-1 font-semibold text-slate-950">
+                <span>results</span>
+                <Send aria-hidden="true" className="h-4 w-4 text-emerald-700" />
+              </span>
+              .
             </p>
-          </div>
-          <div className="mt-6">
-            <button
-              type="button"
-              onClick={() => setIsHelpDialogOpen(false)}
-              className="inline-flex h-11 w-full items-center justify-center rounded-full bg-slate-950 px-4 text-sm font-medium text-white transition hover:bg-slate-800"
-            >
-              Close
-            </button>
           </div>
         </Card>
       </Dialog>
@@ -577,7 +637,7 @@ export default function RosterDetailPage({
             <div className="grid w-full grid-cols-2 gap-3">
               <button
                 type="button"
-                onClick={() => setIsStopDialogOpen(true)}
+                onClick={() => void handleStopSession()}
                 disabled={isStoppingSession}
                 aria-label={stopControlLabel}
                 title={stopControlLabel}
@@ -587,22 +647,31 @@ export default function RosterDetailPage({
                 <span className="hidden sm:inline">{stopControlLabel}</span>
               </button>
 
-              <button
-                type="button"
-                onClick={() => void handleEditorLinkAction()}
-                aria-label={editorLinkControlLabel}
-                title={editorLinkControlLabel}
-                className="inline-flex h-[68px] w-full items-center justify-center gap-2 rounded-full border border-emerald-200 bg-white/90 px-4 text-sm font-medium text-emerald-950 transition hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
-              >
-                {canShareEditorLink ? (
-                  <Share aria-hidden="true" className="h-4 w-4" />
-                ) : copiedLink ? (
-                  <Check aria-hidden="true" className="h-4 w-4 text-emerald-700" />
-                ) : (
-                  <Copy aria-hidden="true" className="h-4 w-4" />
-                )}
-                <span className="hidden sm:inline">{canShareEditorLink ? "Send link" : copiedLink ? "Copied" : "Collection Link"}</span>
-              </button>
+              <div className="flex h-[68px] w-full overflow-hidden rounded-full border border-emerald-200 bg-white/90">
+                <button
+                  type="button"
+                  onClick={handleOpenEditorLink}
+                  aria-label={openEditorLinkControlLabel}
+                  title={openEditorLinkControlLabel}
+                  className="inline-flex min-w-0 flex-1 items-center justify-center gap-2 px-4 text-sm font-medium text-emerald-950 transition hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-emerald-500"
+                >
+                  <ExternalLink aria-hidden="true" className="h-4 w-4" />
+                  <span className="hidden sm:inline">Open link</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleShareEditorLinkAction()}
+                  aria-label={shareEditorLinkControlLabel}
+                  title={shareEditorLinkControlLabel}
+                  className="inline-flex w-14 shrink-0 items-center justify-center border-l border-emerald-200 text-emerald-950 transition hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-emerald-500"
+                >
+                  {copiedLink ? (
+                    <Check aria-hidden="true" className="h-4 w-4 text-emerald-700" />
+                  ) : (
+                    <Share aria-hidden="true" className="h-4 w-4" />
+                  )}
+                </button>
+              </div>
             </div>
           ) : (
             <button
@@ -631,30 +700,8 @@ export default function RosterDetailPage({
       </section>
 
       <section className="overflow-hidden rounded-[28px] border border-white/70 bg-white/90 shadow-sm">
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-5 py-4">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="inline-flex items-center gap-2 text-sm font-semibold text-slate-700">
-              <span>{data.students.length}</span>
-              <User aria-hidden="true" className="h-4 w-4" />
-            </span>
-          </div>
-          <div className="flex flex-wrap gap-3">
-            {latestSession ? (
-              <button
-                type="button"
-                onClick={() => void handleExportCsv()}
-                disabled={!sessionExport || isExporting}
-                aria-label={exportControlLabel}
-                title={exportControlLabel}
-                className="inline-flex h-11 items-center justify-center gap-2 rounded-full border border-slate-300 bg-white px-4 text-sm font-medium text-slate-700 transition hover:border-slate-400 hover:text-slate-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-400"
-              >
-                <Share aria-hidden="true" className="h-4 w-4" />
-                <span className="hidden sm:inline">
-                  {canShareCsvFile ? "Send Attendance" : "Download Attendance"}
-                </span>
-              </button>
-            ) : null}
-
+        <div className="grid grid-cols-3 items-center gap-3 border-b border-slate-200 px-5 py-4">
+          <div className="justify-self-start">
             <Link
               href={`/rosters/import?rosterId=${roster._id}`}
               aria-label="Edit roster"
@@ -664,6 +711,24 @@ export default function RosterDetailPage({
               <Pencil aria-hidden="true" className="h-4 w-4" />
               <span className="hidden sm:inline">Edit Roster</span>
             </Link>
+          </div>
+          <div className="justify-self-center">
+            <PresentTotalPill presentCount={presentCount} totalCount={totalCount} />
+          </div>
+          <div className="justify-self-end">
+            {latestSession ? (
+              <button
+                type="button"
+                onClick={() => void handleExportCsv()}
+                disabled={!sessionExport || isExporting}
+                aria-label={exportControlLabel}
+                title={exportControlLabel}
+                className="inline-flex h-11 items-center justify-center gap-2 rounded-full border border-slate-300 bg-white px-4 text-sm font-medium text-slate-700 transition hover:border-slate-400 hover:text-slate-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-400"
+              >
+                <Send aria-hidden="true" className="h-4 w-4" />
+                <span className="hidden sm:inline">Send Attendance</span>
+              </button>
+            ) : null}
           </div>
         </div>
 
@@ -675,42 +740,52 @@ export default function RosterDetailPage({
                   <button
                     type="button"
                     onClick={() => toggleSort("firstName")}
-                    className="transition hover:text-slate-950"
+                    className={`rounded-full px-3 py-1 transition ${
+                      sortColumn === "firstName"
+                        ? "bg-slate-200 text-slate-950"
+                        : "text-slate-600 hover:bg-slate-100 hover:text-slate-950"
+                    }`}
                   >
-                    First{sortIndicator("firstName")}
+                    First
                   </button>
                 </th>
                 <th className="px-4 py-3 font-medium text-slate-600">
                   <button
                     type="button"
                     onClick={() => toggleSort("lastName")}
-                    className="transition hover:text-slate-950"
+                    className={`rounded-full px-3 py-1 transition ${
+                      sortColumn === "lastName"
+                        ? "bg-slate-200 text-slate-950"
+                        : "text-slate-600 hover:bg-slate-100 hover:text-slate-950"
+                    }`}
                   >
-                    Last{sortIndicator("lastName")}
+                    Last
                   </button>
                 </th>
                 <th className="px-4 py-3 font-medium text-slate-600">
                   <button
                     type="button"
                     onClick={() => toggleSort("studentId")}
-                    className="transition hover:text-slate-950"
+                    className={`rounded-full px-3 py-1 transition ${
+                      sortColumn === "studentId"
+                        ? "bg-slate-200 text-slate-950"
+                        : "text-slate-600 hover:bg-slate-100 hover:text-slate-950"
+                    }`}
                   >
-                    Student ID{sortIndicator("studentId")}
+                    ID
                   </button>
                 </th>
                 <th className="px-4 py-3 font-medium text-slate-600">
                   <button
                     type="button"
                     onClick={() => toggleSort("status")}
-                    className="inline-flex items-center gap-2 transition hover:text-slate-950"
+                    className={`rounded-full px-3 py-1 transition ${
+                      sortColumn === "status"
+                        ? "bg-slate-200 text-slate-950"
+                        : "text-slate-600 hover:bg-slate-100 hover:text-slate-950"
+                    }`}
                   >
-                    Status{sortIndicator("status")}
-                    <span className="inline-flex min-w-6 items-center justify-center rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-800">
-                      {presentCount}
-                    </span>
-                    <span className="inline-flex min-w-6 items-center justify-center rounded-full bg-rose-100 px-2 py-0.5 text-xs font-semibold text-rose-700">
-                      {absentCount}
-                    </span>
+                    Status
                   </button>
                 </th>
               </tr>

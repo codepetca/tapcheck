@@ -5,6 +5,7 @@ import { Search, X } from "lucide-react";
 import Link from "next/link";
 import type { Dispatch, SetStateAction } from "react";
 import { useDeferredValue, useState } from "react";
+import { PresentTotalPill } from "@/components/present-total-pill";
 import { api } from "@/convex/api";
 import type { Id } from "@/convex/model";
 import { cn } from "@/lib/cn";
@@ -231,17 +232,7 @@ export function SessionAttendanceScreen({
               </button>
             ) : null}
           </div>
-          <div
-            aria-label={`${session.presentCount} of ${session.totalCount} students marked present`}
-            className="inline-flex shrink-0 items-stretch overflow-hidden rounded-full bg-slate-950 text-white shadow-sm"
-          >
-            <span className="flex min-w-14 items-center justify-center px-4 text-2xl font-semibold leading-none">
-              {session.presentCount}
-            </span>
-            <span className="flex min-w-12 items-center justify-center border-l border-slate-700 bg-slate-700 px-4 text-lg font-medium leading-none text-slate-200">
-              {session.totalCount}
-            </span>
-          </div>
+          <PresentTotalPill presentCount={session.presentCount} totalCount={session.totalCount} />
         </div>
         {error ? (
           <p className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
@@ -250,7 +241,7 @@ export function SessionAttendanceScreen({
         ) : null}
       </div>
 
-      <div className="sticky top-0 z-10 mt-4">
+      <div className="sticky top-0 z-10 mt-4 bg-[linear-gradient(180deg,#eef6f3_0%,#f7f8fb_44%,#ffffff_100%)] py-2">
         <div className="px-4 py-0">
           <div
             className="grid items-center gap-3 px-2 text-left font-semibold uppercase tracking-[0.16em]"
@@ -373,9 +364,11 @@ export function SessionAttendanceScreen({
                       <div className="truncate text-base font-semibold text-slate-950">
                         {student.lastName || student.displayName}
                       </div>
-                      <div className="mt-1 text-xs font-medium text-emerald-700">
-                        Present{student.markedAt ? ` • ${formatMarkedTime(student.markedAt)}` : ""}
-                      </div>
+                      {student.markedAt ? (
+                        <div className="mt-1 text-xs font-medium text-emerald-700">
+                          {formatMarkedTime(student.markedAt)}
+                        </div>
+                      ) : null}
                     </div>
                     <div className="text-left text-sm font-medium text-emerald-700/80">{student.studentId}</div>
                   </button>

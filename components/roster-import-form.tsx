@@ -566,25 +566,25 @@ export function RosterImportForm() {
             </>
           ) : (
             <label className="block">
-              <span className="mb-2 flex justify-end">
+              <div className="relative">
                 <button
                   type="button"
                   aria-label="Paste list help"
                   aria-expanded={helpModal === "paste"}
                   onClick={() => setHelpModal((current) => (current === "paste" ? null : "paste"))}
-                  className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-slate-400 transition hover:text-slate-600"
+                  className="absolute right-3 top-3 z-10 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-slate-400 transition hover:text-slate-600"
                 >
                   <CircleHelp className="h-4 w-4" />
                 </button>
-              </span>
-              <textarea
-                aria-label="Paste student list"
-                value={pastedText}
-                onChange={(event) => handlePastedTextChange(event.target.value)}
-                placeholder={`123456\tSmith, John\n234567\tJones, Maya`}
-                rows={6}
-                className="w-full rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm text-slate-950 outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
-              />
+                <textarea
+                  aria-label="Paste student list"
+                  value={pastedText}
+                  onChange={(event) => handlePastedTextChange(event.target.value)}
+                  placeholder={`123456\tSmith, John\n234567\tJones, Maya`}
+                  rows={6}
+                  className="w-full rounded-2xl border border-slate-300 bg-white px-4 py-3 pr-12 text-sm text-slate-950 outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
+                />
+              </div>
             </label>
           )}
         </div>

@@ -45,7 +45,7 @@ export function Dialog({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/40 p-4 sm:items-center"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4"
       onClick={closeDisabled ? undefined : onClose}
     >
       <div

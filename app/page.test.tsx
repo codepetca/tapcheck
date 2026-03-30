@@ -13,6 +13,10 @@ vi.mock("@/components/use-current-app-user", () => ({
   useCurrentAppUser: () => mockUseCurrentAppUser(),
 }));
 
+vi.mock("@/components/clerk-header-controls", () => ({
+  ClerkHeaderControls: () => null,
+}));
+
 describe("HomePage", () => {
   beforeEach(() => {
     mockUseQuery.mockReset();
@@ -76,5 +80,16 @@ describe("HomePage", () => {
     render(<HomePage />);
 
     expect(mockUseQuery).toHaveBeenCalledWith(expect.anything(), "skip");
+    expect(screen.getByText("Create a New Roster")).toBeInTheDocument();
+    expect(screen.getByText("Manage a Roster")).toBeInTheDocument();
+  });
+
+  it("shows the stable loading shell while rosters are still loading", () => {
+    mockUseQuery.mockReturnValue(undefined);
+
+    render(<HomePage />);
+
+    expect(screen.getByText("Create a New Roster")).toBeInTheDocument();
+    expect(screen.getByText("Manage a Roster")).toBeInTheDocument();
   });
 });

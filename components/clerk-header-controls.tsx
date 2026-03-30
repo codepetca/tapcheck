@@ -12,7 +12,7 @@ export function ClerkHeaderControls() {
   }
 
   return (
-    <div className="absolute right-4 top-4 z-20 flex items-center gap-2">
+    <div className="flex items-center gap-2">
       <Show when="signed-out">
         <SignInButton>
           <button className="inline-flex h-10 items-center justify-center rounded-full border border-slate-300 bg-white px-4 text-sm font-medium text-slate-700 shadow-sm transition hover:border-slate-400 hover:text-slate-950">

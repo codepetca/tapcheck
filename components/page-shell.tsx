@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { ChevronLeft } from "lucide-react";
+import { ClerkHeaderControls } from "@/components/clerk-header-controls";
 import { buttonVariants } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 
@@ -38,11 +39,10 @@ export function PageShell({
               {backLabel}
             </Link>
           ) : null}
-          {headerAction ? (
-            <div className="absolute right-0 top-1/2 -translate-y-1/2">
-              {headerAction}
-            </div>
-          ) : null}
+          <div className="absolute right-0 top-1/2 flex -translate-y-1/2 items-center gap-2">
+            {headerAction}
+            <ClerkHeaderControls />
+          </div>
           <div
             className={`px-20 text-center ${
               subtitle ? "" : "flex min-h-11 items-center justify-center"

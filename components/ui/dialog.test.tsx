@@ -33,4 +33,18 @@ describe("Dialog", () => {
 
     expect(onClose).toHaveBeenCalledTimes(1);
   });
+
+  it("centers the dialog overlay on screen", () => {
+    const onClose = vi.fn();
+
+    render(
+      <Dialog open onClose={onClose}>
+        <div>Dialog body</div>
+      </Dialog>,
+    );
+
+    const overlay = screen.getByRole("dialog").parentElement;
+    expect(overlay).toHaveClass("items-center");
+    expect(overlay).not.toHaveClass("items-end");
+  });
 });
