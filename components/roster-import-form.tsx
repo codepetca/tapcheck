@@ -1,10 +1,14 @@
 "use client";
 
+import { CircleHelp, Settings2, User } from "lucide-react";
 import Papa from "papaparse";
 import { useMutation, useQuery } from "convex/react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { ConfirmDialog } from "@/components/confirm-dialog";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Dialog } from "@/components/ui/dialog";
 import { useCurrentAppUser } from "@/components/use-current-app-user";
 import { api } from "@/convex/api";
 import type { Id } from "@/convex/model";
@@ -14,6 +18,7 @@ import { buildImportPreview, guessColumnMapping, type ColumnMapping } from "@/li
 type CsvRow = Record<string, string>;
 type ImportSource = "file" | "paste" | null;
 type SourceMode = "file" | "paste";
+type HelpModal = "file" | "paste" | null;
 
 const PASTED_NAME_COLUMN = "Student Name";
 const PASTED_ID_COLUMN = "Student ID";
@@ -128,6 +133,8 @@ export function RosterImportForm() {
   const [pastedRosterName, setPastedRosterName] = useState(() => generateRosterName());
   const [pendingSourceMode, setPendingSourceMode] = useState<SourceMode | null>(null);
   const [seededExistingRosterId, setSeededExistingRosterId] = useState<string | null>(null);
+  const [areOptionsOpen, setAreOptionsOpen] = useState(false);
+  const [helpModal, setHelpModal] = useState<HelpModal>(null);
 
   const preview = buildImportPreview(rows, mapping);
   const hasImportData = rows.length > 0;
@@ -199,6 +206,7 @@ export function RosterImportForm() {
     setParseError(null);
     setSubmitError(null);
     setMapping(seededMapping);
+    setAreOptionsOpen(false);
     setDeactivateMissing(false);
 
     if (!rosterNameTouched) {
@@ -254,6 +262,8 @@ export function RosterImportForm() {
     setParseError(null);
     setSubmitError(null);
     setMapping({ nameColumn: null, studentIdColumn: null, titleColumn: null });
+    setAreOptionsOpen(false);
+    setHelpModal(null);
     setPastedRosterName(nextGeneratedRosterName);
 
     if (!rosterNameTouched) {
@@ -295,6 +305,8 @@ export function RosterImportForm() {
       setFileName("");
       setImportSource(null);
       setPastedRosterName(generateRosterName());
+      setAreOptionsOpen(false);
+      setHelpModal(null);
       applyMapping({ nameColumn: null, studentIdColumn: null, titleColumn: null }, [], null);
       if (!rosterNameTouched) {
         setRosterName(existingRosterName);
@@ -326,6 +338,8 @@ export function RosterImportForm() {
       setPastedText("");
       setImportSource("file");
       setPastedRosterName(generateRosterName());
+      setAreOptionsOpen(!(nextMapping.nameColumn && nextMapping.studentIdColumn));
+      setHelpModal(null);
       applyMapping(nextMapping, normalizedRows, "file");
     } catch (error) {
       setParseError(error instanceof Error ? error.message : "Could not parse CSV.");
@@ -334,6 +348,8 @@ export function RosterImportForm() {
       setFileName("");
       setImportSource(null);
       setPastedRosterName(generateRosterName());
+      setAreOptionsOpen(false);
+      setHelpModal(null);
       applyMapping({ nameColumn: null, studentIdColumn: null, titleColumn: null }, [], null);
       if (!rosterNameTouched) {
         setRosterName(existingRosterName);
@@ -352,6 +368,8 @@ export function RosterImportForm() {
         setRows([]);
         setImportSource(null);
         setPastedRosterName(generateRosterName());
+        setAreOptionsOpen(false);
+        setHelpModal(null);
         applyMapping({ nameColumn: null, studentIdColumn: null, titleColumn: null }, [], null);
         if (!rosterNameTouched) {
           setRosterName(existingRosterName);
@@ -377,6 +395,8 @@ export function RosterImportForm() {
       setImportSource("paste");
       setPastedRosterName(nextPastedRosterName);
       setMapping(nextMapping);
+      setAreOptionsOpen(false);
+      setHelpModal(null);
       if (!rosterNameTouched) {
         setRosterName(isEditingExistingRoster ? existingRosterName : nextPastedRosterName);
       }
@@ -389,6 +409,8 @@ export function RosterImportForm() {
       setFileName("");
       setImportSource(null);
       setPastedRosterName(generateRosterName());
+      setAreOptionsOpen(false);
+      setHelpModal(null);
       applyMapping({ nameColumn: null, studentIdColumn: null, titleColumn: null }, [], null);
       if (!rosterNameTouched) {
         setRosterName(existingRosterName);
@@ -401,7 +423,7 @@ export function RosterImportForm() {
     setSubmitError(null);
 
     if (!rosterName.trim()) {
-      setSubmitError("Roster name is required.");
+      setSubmitError("Roster title is required.");
       return;
     }
 
@@ -465,6 +487,15 @@ export function RosterImportForm() {
         }}
         onCancel={() => setPendingSourceMode(null)}
       />
+      <Dialog open={helpModal !== null} onClose={() => setHelpModal(null)}>
+        <Card className="w-full border border-white/70 bg-white shadow-xl ring-0">
+          <p className="text-sm leading-6 text-slate-600">
+            {helpModal === "paste"
+              ? "Paste or type student ID and name"
+              : "CSV can be many formats including entire SchoolCash Online CSV files."}
+          </p>
+        </Card>
+      </Dialog>
       <section className="rounded-[28px] border border-white/70 bg-white/90 p-5 shadow-sm">
         <div className="space-y-4">
           <div className="flex rounded-2xl bg-slate-100 p-1">
@@ -493,42 +524,67 @@ export function RosterImportForm() {
           </div>
 
           {sourceMode === "file" ? (
-            <label className="block">
-              <input
-                type="file"
-                accept=".csv,text/csv"
-                onChange={(event) => void handleFileChange(event.target.files?.[0] ?? null)}
-                className="sr-only"
-              />
-              <span className="flex flex-wrap items-center gap-3 rounded-2xl bg-white px-4 py-3 text-sm text-slate-600">
-                <span className="inline-flex h-11 items-center justify-center rounded-full bg-slate-950 px-4 text-sm font-medium text-white">
-                  Upload SchoolCash CSV File
-                </span>
-                <span
-                  className={
-                    fileName && importSource === "file"
-                      ? "font-semibold text-slate-950"
-                      : "text-slate-500"
-                  }
-                >
-                  {fileName && importSource === "file"
+            <>
+              <label className="mb-2 block">
+                <input
+                  type="file"
+                  accept=".csv,text/csv"
+                  onChange={(event) => void handleFileChange(event.target.files?.[0] ?? null)}
+                  className="sr-only"
+                />
+                <span className="flex flex-wrap items-center gap-3 rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm text-slate-600">
+                  <span className="inline-flex h-11 items-center justify-center rounded-full bg-slate-950 px-4 text-sm font-medium text-white">
+                    Choose file
+                  </span>
+                  <span
+                    className={
+                      fileName && importSource === "file"
+                        ? "font-semibold text-slate-950"
+                        : "text-slate-500"
+                    }
+                  >
+                    {fileName && importSource === "file"
                     ? fileName
                     : "No file chosen"}
+                  </span>
+                  <span className="ml-auto">
+                    <button
+                      type="button"
+                      aria-label="Supported CSV formats"
+                      aria-expanded={helpModal === "file"}
+                      onClick={(event) => {
+                        event.preventDefault();
+                        setHelpModal((current) => (current === "file" ? null : "file"));
+                      }}
+                      className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-slate-400 transition hover:text-slate-600"
+                    >
+                      <CircleHelp className="h-4 w-4" />
+                    </button>
+                  </span>
                 </span>
-              </span>
-            </label>
+              </label>
+            </>
           ) : (
             <label className="block">
-              <span className="mb-2 block text-sm font-medium text-slate-700">
-                Paste or type student ID and name
-              </span>
-              <textarea
-                value={pastedText}
-                onChange={(event) => handlePastedTextChange(event.target.value)}
-                placeholder={`123456\tSmith, John\n234567\tJones, Maya`}
-                rows={6}
-                className="w-full rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm text-slate-950 outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
-              />
+              <div className="relative">
+                <button
+                  type="button"
+                  aria-label="Paste list help"
+                  aria-expanded={helpModal === "paste"}
+                  onClick={() => setHelpModal((current) => (current === "paste" ? null : "paste"))}
+                  className="absolute right-3 top-3 z-10 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-slate-400 transition hover:text-slate-600"
+                >
+                  <CircleHelp className="h-4 w-4" />
+                </button>
+                <textarea
+                  aria-label="Paste student list"
+                  value={pastedText}
+                  onChange={(event) => handlePastedTextChange(event.target.value)}
+                  placeholder={`123456\tSmith, John\n234567\tJones, Maya`}
+                  rows={6}
+                  className="w-full rounded-2xl border border-slate-300 bg-white px-4 py-3 pr-12 text-sm text-slate-950 outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
+                />
+              </div>
             </label>
           )}
         </div>
@@ -540,20 +596,33 @@ export function RosterImportForm() {
         {hasImportData ? (
           <>
             <div className="space-y-4">
-              <label className="block">
-                <span className="mb-2 block text-sm font-medium text-slate-700">Roster name</span>
-                <input
-                  value={rosterName}
-                  onChange={(event) => {
-                    setRosterNameTouched(true);
-                    setRosterName(event.target.value);
-                  }}
-                  placeholder="Period 1 Homeroom"
-                  className="h-12 w-full rounded-2xl border border-slate-300 bg-white px-4 text-base text-slate-950 outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
-                />
-              </label>
+              <div className="space-y-2">
+                <span className="block text-base font-semibold text-slate-900">Title</span>
+                <div className="flex items-center gap-3">
+                  <input
+                    value={rosterName}
+                    onChange={(event) => {
+                      setRosterNameTouched(true);
+                      setRosterName(event.target.value);
+                    }}
+                    placeholder="Period 1 Homeroom"
+                    className="h-12 min-w-0 flex-1 rounded-2xl border border-slate-300 bg-white px-4 text-base text-slate-950 outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
+                  />
+                  {importSource === "file" ? (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      aria-label="Import settings"
+                      className="h-12 w-12 shrink-0 px-0 text-slate-500"
+                      onClick={() => setAreOptionsOpen((current) => !current)}
+                    >
+                      <Settings2 className="h-4.5 w-4.5" />
+                    </Button>
+                  ) : null}
+                </div>
+              </div>
 
-              {importSource === "file" ? (
+              {importSource === "file" && areOptionsOpen ? (
                 <div className="grid gap-4 sm:grid-cols-2">
                   <label className="block">
                     <span className="mb-2 block text-sm font-medium text-slate-700">Name column</span>
@@ -596,29 +665,6 @@ export function RosterImportForm() {
                       ))}
                     </select>
                   </label>
-
-                  <label className="block sm:col-span-2">
-                    <span className="mb-2 block text-sm font-medium text-slate-700">
-                      Roster title column
-                    </span>
-                    <select
-                      value={mapping.titleColumn ?? ""}
-                      onChange={(event) =>
-                        applyMapping({
-                          ...mapping,
-                          titleColumn: event.target.value || null,
-                        })
-                      }
-                      className="h-12 w-full rounded-2xl border border-slate-300 bg-white px-4 text-base text-slate-950 outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
-                    >
-                      <option value="">No title column</option>
-                      {headers.map((header) => (
-                        <option key={header} value={header}>
-                          {header}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
                 </div>
               ) : null}
             </div>
@@ -629,12 +675,6 @@ export function RosterImportForm() {
                   <p key={error}>{error}</p>
                 ))}
               </div>
-            ) : null}
-
-            {importSource === "file" && preview.inferredRosterName ? (
-              <p className="mt-4 text-sm text-slate-600">
-                Inferred roster title: <span className="font-medium text-slate-900">{preview.inferredRosterName}</span>
-              </p>
             ) : null}
 
             {importSource === "file" && preview.titleWarnings.length > 0 ? (
@@ -662,19 +702,11 @@ export function RosterImportForm() {
               </label>
             ) : null}
 
-            <div className="mt-6 flex items-center justify-between gap-4">
-              <div>
-                <h2 className="font-heading text-lg font-semibold tracking-tight text-slate-950">
-                  Preview
-                </h2>
-                <p className="mt-1 text-sm text-slate-600">
-                  {preview.rows.length} rows parsed • {preview.validStudents.length} ready to import
-                </p>
-              </div>
+            <div className="mt-6">
               <button
                 type="submit"
                 disabled={isSubmitting || preview.validStudents.length === 0 || preview.errors.length > 0}
-                className="inline-flex h-12 items-center justify-center rounded-full bg-slate-950 px-5 text-sm font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+                className="inline-flex h-12 w-full items-center justify-center rounded-full bg-slate-950 px-5 text-sm font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
               >
                 {isSubmitting
                   ? "Importing..."
@@ -690,13 +722,27 @@ export function RosterImportForm() {
               </p>
             ) : null}
 
+            <div className="mt-6 flex items-center justify-between gap-4">
+              <h2 className="font-heading text-lg font-semibold tracking-tight text-slate-950">
+                Preview
+              </h2>
+            </div>
+
             <div className="mt-4 overflow-hidden rounded-[24px] border border-slate-200">
               <div className="max-h-[28rem] overflow-auto">
                 <table className="min-w-full divide-y divide-slate-200 text-left text-sm">
                   <thead className="sticky top-0 bg-slate-50">
                     <tr>
                       <th className="px-4 py-3 font-medium text-slate-600">Row</th>
-                      <th className="px-4 py-3 font-medium text-slate-600">Student</th>
+                      <th className="px-4 py-3 font-medium text-slate-600">
+                        <span className="inline-flex items-center gap-2">
+                          <span>Student</span>
+                          <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">
+                            <span>{preview.rows.length}</span>
+                            <User className="h-3.5 w-3.5" />
+                          </span>
+                        </span>
+                      </th>
                       <th className="px-4 py-3 font-medium text-slate-600">Student ID</th>
                       <th className="px-4 py-3 font-medium text-slate-600">Status</th>
                     </tr>

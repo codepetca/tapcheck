@@ -15,3 +15,6 @@ Convex agent skills for common tasks can be installed by running `npx convex ai-
 Always preserve the internal auth model of `app_users` + `auth_identities` with roster ownership via `rosters.ownerAppUserId` unless the task explicitly changes auth architecture.
 Prefer evidence-based implementations: inspect the existing code and tests before changing architecture, extend the current test harness with each substantive behavior change, and validate claims with local verification instead of assumptions.
 For UI work, preserve the existing minimal Tapcheck aesthetic, prefer primitive components and composable layouts over bespoke one-off markup, and read `docs/ai-ui-ux.md` before making substantial visual changes.
+
+Use git worktrees for repo changes rather than working directly in the hub checkout. Create Tapcheck worktrees under `/Users/stew/Repos/.worktrees/tapcheck/`.
+For each new worktree, replace the worktree-local `.env.local` with a symlink to the hub repo env file at `/Users/stew/Repos/tapcheck/.env.local` so local Clerk and Convex configuration stays shared across worktrees.

@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { ChevronLeft } from "lucide-react";
+import { ClerkHeaderControls } from "@/components/clerk-header-controls";
 import { buttonVariants } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 
@@ -27,22 +28,23 @@ export function PageShell({
           {backHref ? (
             <Link
               href={backHref}
+              aria-label={backLabel}
+              title={backLabel}
               className={buttonVariants({
                 variant: "outline",
                 size: "sm",
                 className:
-                  "absolute -left-2 top-1/2 -translate-y-1/2 shrink-0 border-transparent shadow-none px-3 text-slate-600 hover:text-slate-900",
+                  "absolute -left-2 top-1/2 -translate-y-1/2 shrink-0 border-transparent shadow-none px-2 text-slate-600 hover:text-slate-900 sm:px-3",
               })}
             >
-              <ChevronLeft aria-hidden="true" className="mr-1 h-4 w-4" />
-              {backLabel}
+              <ChevronLeft aria-hidden="true" className="h-5 w-5 sm:mr-1 sm:h-4 sm:w-4" />
+              <span className="hidden sm:inline">{backLabel}</span>
             </Link>
           ) : null}
-          {headerAction ? (
-            <div className="absolute right-0 top-1/2 -translate-y-1/2">
-              {headerAction}
-            </div>
-          ) : null}
+          <div className="absolute right-0 top-1/2 flex -translate-y-1/2 items-center gap-2">
+            {headerAction}
+            <ClerkHeaderControls />
+          </div>
           <div
             className={`px-20 text-center ${
               subtitle ? "" : "flex min-h-11 items-center justify-center"

@@ -1,13 +1,14 @@
 import { SignIn } from "@clerk/nextjs";
 import { AuthShell } from "@/components/auth-shell";
+import { SIGN_IN_URL, SIGN_UP_URL } from "@/lib/auth-routes";
 
 export default function SignInPage() {
   return (
     <AuthShell bare>
       <SignIn
-        path="/sign-in"
+        path={SIGN_IN_URL}
         routing="path"
-        signUpUrl="/sign-up"
+        signUpUrl={SIGN_UP_URL}
         forceRedirectUrl="/"
         appearance={{
           theme: "simple",

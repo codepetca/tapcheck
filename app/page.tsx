@@ -15,6 +15,45 @@ function formatDate(timestamp: number) {
   }).format(timestamp);
 }
 
+function HomePageSkeleton() {
+  return (
+    <>
+      <section className="space-y-4">
+        <div className="overflow-hidden rounded-[28px] border border-white/70 bg-white/90 shadow-sm">
+          <div className="inline-flex h-16 w-full items-center justify-center bg-slate-950 px-6 text-base font-semibold text-white/80">
+            Create a New Roster
+          </div>
+        </div>
+      </section>
+
+      <section className="rounded-[28px] border border-white/70 bg-white/90 p-5 shadow-sm">
+        <h2 className="font-heading text-lg font-semibold tracking-tight text-slate-950">
+          Manage a Roster
+        </h2>
+        <div className="mt-4 space-y-3" aria-hidden="true">
+          {Array.from({ length: 3 }).map((_, index) => (
+            <div
+              key={index}
+              className="rounded-[24px] border border-slate-200 bg-slate-50/90 px-4 py-4"
+            >
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0 flex-1">
+                  <div className="h-5 w-40 animate-pulse rounded-full bg-slate-200" />
+                  <div className="mt-2 h-4 w-28 animate-pulse rounded-full bg-slate-200" />
+                </div>
+                <div className="flex flex-col items-end gap-2">
+                  <div className="h-4 w-20 animate-pulse rounded-full bg-slate-200" />
+                  <div className="h-6 w-14 animate-pulse rounded-full bg-slate-200" />
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
+    </>
+  );
+}
+
 export default function HomePage() {
   const { bootstrapError, isReady } = useCurrentAppUser();
   const rosters = useQuery(api.rosters.list, isReady ? {} : "skip");
@@ -29,10 +68,10 @@ export default function HomePage() {
     );
   }
 
-  if (!isReady) {
+  if (!isReady || rosters === undefined) {
     return (
       <PageShell title="Tapcheck" subtitle="Mobile-first attendance taking">
-        <div className="h-40 animate-pulse rounded-[28px] bg-white/80" />
+        <HomePageSkeleton />
       </PageShell>
     );
   }

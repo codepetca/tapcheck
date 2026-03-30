@@ -146,13 +146,12 @@ NEXT_PUBLIC_CONVEX_URL=https://your-deployment.convex.cloud
 NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_your_publishable_key
 CLERK_SECRET_KEY=sk_test_your_secret_key
 CLERK_JWT_ISSUER_DOMAIN=https://your-instance.clerk.accounts.dev
-NEXT_PUBLIC_CLERK_SIGN_IN_URL=/sign-in
-NEXT_PUBLIC_CLERK_SIGN_UP_URL=/sign-up
 ```
 
 You can use [.env.local.example](./.env.local.example) as a starting point.
 
 Set `CLERK_JWT_ISSUER_DOMAIN` in the Convex deployment environment as well so Convex can validate Clerk-issued JWTs.
+The app auth routes are defined in code as `/sign-in` and `/sign-up`; they do not need environment variables.
 
 ### 3. Run the app
 

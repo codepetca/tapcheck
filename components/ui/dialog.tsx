@@ -44,17 +44,15 @@ export function Dialog({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/40 p-4 sm:items-center">
-      <button
-        type="button"
-        aria-label="Close dialog"
-        onClick={closeDisabled ? undefined : onClose}
-        className="absolute inset-0 cursor-default"
-      />
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4"
+      onClick={closeDisabled ? undefined : onClose}
+    >
       <div
         role="dialog"
         aria-modal="true"
         className={cn("relative w-full max-w-md", panelClassName)}
+        onClick={(event) => event.stopPropagation()}
       >
         {children}
       </div>
