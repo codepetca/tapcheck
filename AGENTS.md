@@ -18,3 +18,4 @@ For UI work, preserve the existing minimal Tapcheck aesthetic, prefer primitive 
 
 Use git worktrees for repo changes rather than working directly in the hub checkout. Create Tapcheck worktrees under `/Users/stew/Repos/.worktrees/tapcheck/`.
 For each new worktree, replace the worktree-local `.env.local` with a symlink to the hub repo env file at `/Users/stew/Repos/tapcheck/.env.local` so local Clerk and Convex configuration stays shared across worktrees.
+Install dependencies inside each worktree with `pnpm install`. Do not symlink `node_modules` from the hub checkout into a worktree; Next.js 16/Turbopack rejects symlinks that point outside the worktree root.

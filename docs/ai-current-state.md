@@ -36,6 +36,8 @@ Tapcheck is a mobile-first classroom attendance app. Authenticated staff users c
   - current app user bootstrap
   - current user lookup
   - roster ownership checks
+- When changing Convex schemas that touch existing local tables such as `app_users`, `auth_identities`, `rosters`, `students`, or `attendance`, assume local data already exists and use a widen-migrate-narrow rollout instead of immediately making new fields required.
+- If a refactor introduces replacement tables, keep legacy tables and compatibility fields in the schema until backfill is complete and verified.
 
 ## Current Frontend Conventions
 
@@ -48,6 +50,7 @@ Tapcheck is a mobile-first classroom attendance app. Authenticated staff users c
 
 - Do implementation work from git worktrees under `/Users/stew/Repos/.worktrees/tapcheck/`, not from the hub checkout.
 - For every new worktree, symlink `.env.local` to `/Users/stew/Repos/tapcheck/.env.local` so Clerk and Convex local environment settings stay consistent across worktrees.
+- Install dependencies inside each worktree with `pnpm install`. Do not symlink `node_modules` from the hub checkout into a worktree; Next.js 16/Turbopack will crash when the symlink points outside the worktree root.
 
 ## Testing Harness
 
