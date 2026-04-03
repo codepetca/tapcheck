@@ -6,5 +6,6 @@
       "production": true,
       "*": false
     }
-  }
+  },
+  "ignoreCommand": "bash scripts/vercel-ignore-build.sh"
 }
