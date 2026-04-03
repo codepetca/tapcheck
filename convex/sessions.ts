@@ -1,6 +1,6 @@
 import { v } from "convex/values";
 import { createShareToken } from "../lib/session-links";
-import { requireOwnedRoster } from "./auth";
+import { requireAccessibleRoster } from "./auth";
 import type { MutationCtx } from "./server";
 import { mutation } from "./server";
 
@@ -20,7 +20,7 @@ export const create = mutation({
   },
   returns: v.id("sessions"),
   handler: async (ctx, args) => {
-    const { roster } = await requireOwnedRoster(ctx, args.rosterId);
+    const { roster, appUser } = await requireAccessibleRoster(ctx, args.rosterId);
 
     const existingSessions = await ctx.db
       .query("sessions")
@@ -43,14 +43,14 @@ export const create = mutation({
       throw new Error("Could not generate editor link. Please try again.");
     }
 
-    const students = await ctx.db
-      .query("students")
+    const participants = await ctx.db
+      .query("participants")
       .withIndex("by_rosterId_active_sortKey", (q) =>
         q.eq("rosterId", args.rosterId).eq("active", true),
       )
       .collect();
 
-    if (students.length === 0) {
+    if (participants.length === 0) {
       throw new Error("Roster has no active students.");
     }
 
@@ -60,17 +60,23 @@ export const create = mutation({
       rosterId: args.rosterId,
       title: roster.name,
       date: args.date,
+      sessionType: "recurring_class",
+      participantMode: "roster_only",
       isOpen: true,
+      createdByAppUserId: appUser._id,
       editorToken,
       createdAt,
+      updatedAt: createdAt,
+      openedAt: createdAt,
     });
 
-    for (const student of students) {
-      await ctx.db.insert("attendance", {
+    for (const participant of participants) {
+      await ctx.db.insert("attendance_records", {
         sessionId,
-        studentRef: student._id,
-        studentId: student.studentId,
-        present: false,
+        participantId: participant._id,
+        linkedAppUserId: participant.linkedAppUserId,
+        status: "absent",
+        source: "override",
         modifiedAt: createdAt,
       });
     }
@@ -88,13 +94,18 @@ export const stop = mutation({
       throw new Error("Session not found.");
     }
 
-    await requireOwnedRoster(ctx, session.rosterId);
+    await requireAccessibleRoster(ctx, session.rosterId);
 
     if (!session.isOpen) {
       return null;
     }
 
-    await ctx.db.patch(args.sessionId, { isOpen: false });
+    const now = Date.now();
+    await ctx.db.patch(args.sessionId, {
+      isOpen: false,
+      closedAt: now,
+      updatedAt: now,
+    });
     return null;
   },
 });
@@ -108,7 +119,7 @@ export const resume = mutation({
       throw new Error("Session not found.");
     }
 
-    await requireOwnedRoster(ctx, session.rosterId);
+    await requireAccessibleRoster(ctx, session.rosterId);
 
     if (session.isOpen) {
       return null;
@@ -123,7 +134,12 @@ export const resume = mutation({
       throw new Error("This roster already has an active session.");
     }
 
-    await ctx.db.patch(args.sessionId, { isOpen: true });
+    const now = Date.now();
+    await ctx.db.patch(args.sessionId, {
+      isOpen: true,
+      openedAt: now,
+      updatedAt: now,
+    });
     return null;
   },
 });

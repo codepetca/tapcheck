@@ -40,8 +40,8 @@ export function SessionAttendanceScreen({
   const [search, setSearch] = useState("");
   const [sortMode, setSortMode] = useState<SortMode>("last");
   const [error, setError] = useState<string | null>(null);
-  const [exitingStudentRefs, setExitingStudentRefs] = useState<Set<Id<"students">>>(() => new Set());
-  const [submittingStudentRefs, setSubmittingStudentRefs] = useState<Set<Id<"students">>>(
+  const [exitingStudentRefs, setExitingStudentRefs] = useState<Set<Id<"participants">>>(() => new Set());
+  const [submittingStudentRefs, setSubmittingStudentRefs] = useState<Set<Id<"participants">>>(
     () => new Set(),
   );
   const deferredSearch = useDeferredValue(search.trim().toLocaleLowerCase());
@@ -161,8 +161,8 @@ export function SessionAttendanceScreen({
   }
 
   function setStudentTransitionState(
-    studentRef: Id<"students">,
-    setter: Dispatch<SetStateAction<Set<Id<"students">>>>,
+    studentRef: Id<"participants">,
+    setter: Dispatch<SetStateAction<Set<Id<"participants">>>>,
     active: boolean,
   ) {
     setter((current) => {
@@ -178,7 +178,7 @@ export function SessionAttendanceScreen({
     });
   }
 
-  async function handleToggle(studentRef: Id<"students">) {
+  async function handleToggle(studentRef: Id<"participants">) {
     if (submittingStudentRefs.has(studentRef)) {
       return;
     }
