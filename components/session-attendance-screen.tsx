@@ -17,7 +17,7 @@ type SessionAttendanceScreenProps = {
 };
 
 type SortMode = "last" | "first" | "id";
-type SessionStudentRef = Id<"participants"> | Id<"students">;
+type SessionStudentRef = Id<"participants">;
 
 const ATTENDANCE_TAP_EXIT_MS = 160;
 

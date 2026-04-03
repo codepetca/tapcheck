@@ -135,12 +135,8 @@ function validateImportedStudents(
 async function findAccessibleRosterMembership(
   ctx: QueryCtx,
   appUserId: Id<"app_users">,
-  roster: { _id: Id<"rosters">; organizationId?: Id<"organizations">; ownerAppUserId?: Id<"app_users"> },
+  roster: { _id: Id<"rosters">; organizationId: Id<"organizations"> },
 ) {
-  if (!roster.organizationId) {
-    return roster.ownerAppUserId === appUserId ? "legacy-owner" : null;
-  }
-
   const memberships = await listCurrentMemberships(ctx, appUserId);
 
   for (const { membership } of memberships) {

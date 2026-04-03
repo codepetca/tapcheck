@@ -8,10 +8,6 @@ function isPresentStatus(status: "present" | "late" | "absent" | "excused") {
   return status === "present" || status === "late";
 }
 
-function isLegacyStudentRef(studentRef: Id<"participants"> | Id<"students">) {
-  return String(studentRef).endsWith(";students");
-}
-
 async function loadActiveRosterParticipants(ctx: QueryCtx, rosterId: Id<"rosters">) {
   return ctx.db
     .query("participants")
@@ -20,7 +16,7 @@ async function loadActiveRosterParticipants(ctx: QueryCtx, rosterId: Id<"rosters
 }
 
 type SessionParticipantRow = {
-  studentRef: Id<"participants"> | Id<"students">;
+  studentRef: Id<"participants">;
   studentId: string;
   rawName: string;
   displayName: string;
@@ -55,15 +51,18 @@ async function loadOpenSessionParticipants(
 
   for (const [index, record] of args.attendanceRecords.entries()) {
     const participant = attendanceParticipants[index];
+    if (!participant) {
+      continue;
+    }
 
     participantsByRef.set(record.participantId, {
       studentRef: record.participantId,
-      studentId: participant?.externalId ?? "",
-      rawName: participant?.rawName ?? "",
-      displayName: participant?.displayName ?? participant?.rawName ?? "",
-      firstName: participant?.firstName ?? "",
-      lastName: participant?.lastName ?? "",
-      sortKey: participant?.sortKey ?? `${participant?.externalId ?? ""}`,
+      studentId: participant.externalId ?? "",
+      rawName: participant.rawName,
+      displayName: participant.displayName || participant.rawName || participant.externalId || "",
+      firstName: participant.firstName,
+      lastName: participant.lastName,
+      sortKey: participant.sortKey || `${participant.externalId ?? ""}`,
       present: isPresentStatus(record.status),
       markedAt: isPresentStatus(record.status) ? record.markedAt : undefined,
       modifiedAt: record.modifiedAt,
@@ -94,132 +93,6 @@ async function loadOpenSessionParticipants(
   return participants;
 }
 
-async function loadLegacyOpenSessionStudents(
-  ctx: QueryCtx,
-  args: {
-    rosterId: Id<"rosters">;
-    createdAt: number;
-    attendanceRecords: Array<{
-      _id: Id<"attendance">;
-      studentRef: Id<"students">;
-      studentId: string;
-      present: boolean;
-      markedAt?: number;
-      modifiedAt: number;
-      lastModifiedAt?: number;
-    }>;
-  },
-) {
-  const [attendanceStudents, activeStudents] = await Promise.all([
-    Promise.all(args.attendanceRecords.map((record) => ctx.db.get(record.studentRef))),
-    ctx.db
-      .query("students")
-      .withIndex("by_rosterId_active_sortKey", (q) => q.eq("rosterId", args.rosterId).eq("active", true))
-      .collect(),
-  ]);
-
-  const studentsByRef = new Map<Id<"students">, SessionParticipantRow>();
-
-  for (const [index, record] of args.attendanceRecords.entries()) {
-    const student = attendanceStudents[index];
-
-    studentsByRef.set(record.studentRef, {
-      studentRef: record.studentRef,
-      studentId: record.studentId,
-      rawName: student?.rawName ?? "",
-      displayName: student?.displayName ?? student?.rawName ?? record.studentId,
-      firstName: student?.firstName ?? "",
-      lastName: student?.lastName ?? "",
-      sortKey: student?.sortKey ?? `${record.studentId}`,
-      present: record.present,
-      markedAt: record.present ? record.markedAt : undefined,
-      modifiedAt: record.modifiedAt,
-    });
-  }
-
-  for (const student of activeStudents) {
-    if (studentsByRef.has(student._id)) {
-      continue;
-    }
-
-    studentsByRef.set(student._id, {
-      studentRef: student._id,
-      studentId: student.studentId,
-      rawName: student.rawName,
-      displayName: student.displayName || student.rawName || student.studentId,
-      firstName: student.firstName,
-      lastName: student.lastName,
-      sortKey: student.sortKey,
-      present: false,
-      markedAt: undefined,
-      modifiedAt: args.createdAt,
-    });
-  }
-
-  const students = [...studentsByRef.values()];
-  students.sort((left, right) => left.sortKey.localeCompare(right.sortKey));
-  return students;
-}
-
-async function loadLegacyEditorSessionSnapshot(
-  ctx: QueryCtx,
-  session: { _id: Id<"sessions">; rosterId: Id<"rosters">; title: string; date: string; isOpen: boolean; createdAt: number },
-  roster: { _id: Id<"rosters">; name: string },
-) {
-  const attendanceRecords = await ctx.db
-    .query("attendance")
-    .withIndex("by_sessionId", (q) => q.eq("sessionId", session._id))
-    .collect();
-
-  const studentsWithAttendance = await loadLegacyOpenSessionStudents(ctx, {
-    rosterId: session.rosterId,
-    createdAt: session.createdAt,
-    attendanceRecords,
-  });
-
-  return {
-    session: {
-      _id: session._id,
-      title: session.title,
-      date: session.date,
-      isOpen: session.isOpen,
-    },
-    roster: {
-      _id: roster._id,
-      name: roster.name,
-    },
-    totalCount: studentsWithAttendance.length,
-    presentCount: studentsWithAttendance.filter((student) => student.present).length,
-    students: studentsWithAttendance.map((student) => ({
-      studentRef: student.studentRef,
-      studentId: student.studentId,
-      rawName: student.rawName,
-      displayName: student.displayName,
-      firstName: student.firstName,
-      lastName: student.lastName,
-      present: student.present,
-      markedAt: student.markedAt,
-      modifiedAt: student.modifiedAt,
-      lastModifiedAt: student.modifiedAt,
-    })),
-  };
-}
-
-async function shouldUseLegacySessionData(ctx: QueryCtx, rosterId: Id<"rosters">, sessionId: Id<"sessions">) {
-  const [attendanceRecords, participants] = await Promise.all([
-    ctx.db
-      .query("attendance_records")
-      .withIndex("by_sessionId", (q) => q.eq("sessionId", sessionId))
-      .take(1),
-    ctx.db
-      .query("participants")
-      .withIndex("by_rosterId_sortKey", (q) => q.eq("rosterId", rosterId))
-      .take(1),
-  ]);
-
-  return attendanceRecords.length === 0 && participants.length === 0;
-}
-
 async function loadEditorSessionSnapshot(ctx: QueryCtx, token: string) {
   const session = await ctx.db
     .query("sessions")
@@ -240,10 +113,6 @@ async function loadEditorSessionSnapshot(ctx: QueryCtx, token: string) {
 
   if (!roster) {
     return null;
-  }
-
-  if (await shouldUseLegacySessionData(ctx, session.rosterId, session._id)) {
-    return loadLegacyEditorSessionSnapshot(ctx, session, roster);
   }
 
   const participantsWithAttendance = await loadOpenSessionParticipants(ctx, {
@@ -289,62 +158,6 @@ async function loadSessionExport(ctx: QueryCtx, sessionId: Id<"sessions">) {
   const roster = await ctx.db.get(session.rosterId);
   if (!roster) {
     return null;
-  }
-
-  if (await shouldUseLegacySessionData(ctx, session.rosterId, session._id)) {
-    const attendanceRecords = await ctx.db
-      .query("attendance")
-      .withIndex("by_sessionId", (q) => q.eq("sessionId", sessionId))
-      .collect();
-
-    const rows = session.isOpen
-      ? loadLegacyOpenSessionStudents(ctx, {
-          rosterId: session.rosterId,
-          createdAt: session.createdAt,
-          attendanceRecords,
-        })
-      : Promise.all(
-          attendanceRecords.map(async (record) => {
-            const student = await ctx.db.get(record.studentRef);
-            return {
-              studentId: record.studentId,
-              rawName: student?.rawName ?? "",
-              displayName: student?.displayName ?? "",
-              firstName: student?.firstName ?? "",
-              lastName: student?.lastName ?? "",
-              sortKey: student?.sortKey ?? `${record.studentId}`,
-              present: record.present,
-              markedAt: record.present ? record.markedAt : undefined,
-              modifiedAt: record.modifiedAt,
-            };
-          }),
-        );
-
-    const resolvedRows = await rows;
-    resolvedRows.sort((left, right) => left.sortKey.localeCompare(right.sortKey));
-
-    return {
-      roster: {
-        _id: roster._id,
-        name: roster.name,
-      },
-      session: {
-        _id: session._id,
-        title: session.title,
-        date: session.date,
-        isOpen: session.isOpen,
-      },
-      rows: resolvedRows.map((row) => ({
-        studentId: row.studentId,
-        rawName: row.rawName,
-        displayName: row.displayName,
-        firstName: row.firstName,
-        lastName: row.lastName,
-        present: row.present,
-        markedAt: row.markedAt,
-        modifiedAt: row.modifiedAt,
-      })),
-    };
   }
 
   const attendanceRecords = await ctx.db
@@ -417,7 +230,7 @@ const sessionResult = v.object({
   presentCount: v.number(),
   students: v.array(
     v.object({
-      studentRef: v.union(v.id("participants"), v.id("students")),
+      studentRef: v.id("participants"),
       studentId: v.string(),
       rawName: v.string(),
       displayName: v.string(),
@@ -488,7 +301,7 @@ export const getSessionExport = query({
 export const toggleByEditorToken = mutation({
   args: {
     token: v.string(),
-    studentRef: v.union(v.id("participants"), v.id("students")),
+    studentRef: v.id("participants"),
     clientNow: v.number(),
   },
   returns: v.null(),
@@ -506,51 +319,7 @@ export const toggleByEditorToken = mutation({
       throw new Error("This session has ended.");
     }
 
-    if (isLegacyStudentRef(args.studentRef)) {
-      const legacyStudent = await ctx.db.get(args.studentRef as Id<"students">);
-      if (!legacyStudent || legacyStudent.rosterId !== session.rosterId) {
-        throw new Error("Student not found in this roster.");
-      }
-
-      const legacyAttendance = await ctx.db
-        .query("attendance")
-        .withIndex("by_sessionId_studentRef", (q) =>
-          q.eq("sessionId", session._id).eq("studentRef", legacyStudent._id),
-        )
-        .unique();
-
-      if (!legacyAttendance) {
-        if (!legacyStudent.active) {
-          throw new Error("Student not found in this roster.");
-        }
-
-        await ctx.db.insert("attendance", {
-          sessionId: session._id,
-          studentRef: legacyStudent._id,
-          studentId: legacyStudent.studentId,
-          present: true,
-          markedAt: args.clientNow,
-          lastModifiedAt: args.clientNow,
-          modifiedAt: args.clientNow,
-          modifiedViaTokenType: "editor",
-        });
-        return null;
-      }
-
-      const now = args.clientNow;
-      const nextPresent = !legacyAttendance.present;
-
-      await ctx.db.patch(legacyAttendance._id, {
-        present: nextPresent,
-        markedAt: nextPresent ? now : legacyAttendance.markedAt,
-        lastModifiedAt: now,
-        modifiedAt: now,
-        modifiedViaTokenType: "editor",
-      });
-      return null;
-    }
-
-    const participant = await ctx.db.get(args.studentRef as Id<"participants">);
+    const participant = await ctx.db.get(args.studentRef);
     if (!participant || participant.rosterId !== session.rosterId) {
       throw new Error("Student not found in this roster.");
     }

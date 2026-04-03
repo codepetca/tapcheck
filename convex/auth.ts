@@ -45,10 +45,6 @@ function buildOrganizationSlug(displayName: string, appUserId: Id<"app_users">) 
   return `${base}-${String(appUserId).slice(-8).toLocaleLowerCase()}`;
 }
 
-function getAppUserStatus(appUser: Pick<AppUserDoc, "status">) {
-  return appUser.status ?? "active";
-}
-
 function toCurrentAppUserResult(
   appUser: AppUserDoc,
   authIdentity: AuthIdentityDoc | null,
@@ -58,13 +54,13 @@ function toCurrentAppUserResult(
   return {
     _id: appUser._id,
     displayName: appUser.displayName,
-    status: getAppUserStatus(appUser),
+    status: appUser.status,
     createdAt: appUser.createdAt,
     identity: authIdentity
       ? {
           provider: authIdentity.provider,
-          email: authIdentity.emailSnapshot ?? authIdentity.email,
-          name: authIdentity.nameSnapshot ?? authIdentity.name,
+          email: authIdentity.emailSnapshot,
+          name: authIdentity.nameSnapshot,
         }
       : undefined,
     defaultOrganization:
@@ -202,135 +198,6 @@ async function ensureDefaultOrganizationMembership(ctx: MutationCtx, appUser: Ap
   };
 }
 
-async function ensureLegacyRosterAccess(
-  ctx: MutationCtx,
-  args: {
-    appUser: AppUserDoc;
-    organization: OrganizationDoc;
-    membership: MembershipDoc;
-  },
-) {
-  const legacyRosters = await ctx.db
-    .query("rosters")
-    .withIndex("by_ownerAppUserId_createdAt", (q) => q.eq("ownerAppUserId", args.appUser._id))
-    .collect();
-
-  for (const roster of legacyRosters) {
-    const rosterUpdatedAt = roster.updatedAt ?? roster.createdAt;
-    if (!roster.organizationId || !roster.createdByAppUserId || !roster.updatedAt) {
-      await ctx.db.patch(roster._id, {
-        ownerAppUserId: roster.ownerAppUserId ?? args.appUser._id,
-        organizationId: roster.organizationId ?? args.organization._id,
-        createdByAppUserId: roster.createdByAppUserId ?? roster.ownerAppUserId ?? args.appUser._id,
-        updatedAt: rosterUpdatedAt,
-      });
-    }
-
-    const existingRosterAccess = await ctx.db
-      .query("roster_access")
-      .withIndex("by_rosterId_membershipId", (q) =>
-        q.eq("rosterId", roster._id).eq("membershipId", args.membership._id),
-      )
-      .unique();
-
-    if (!existingRosterAccess) {
-      await ctx.db.insert("roster_access", {
-        rosterId: roster._id,
-        membershipId: args.membership._id,
-        accessRole: args.membership.role === "admin" ? "admin" : "staff",
-        createdAt: roster.createdAt,
-        updatedAt: rosterUpdatedAt,
-      });
-    }
-
-    const legacyStudents = await ctx.db
-      .query("students")
-      .withIndex("by_rosterId_sortKey", (q) => q.eq("rosterId", roster._id))
-      .collect();
-
-    const participantIdsByStudentRef = new Map<Id<"students">, Id<"participants">>();
-
-    for (const legacyStudent of legacyStudents) {
-      let participant = await ctx.db
-        .query("participants")
-        .withIndex("by_rosterId_externalId", (q) =>
-          q.eq("rosterId", roster._id).eq("externalId", legacyStudent.studentId),
-        )
-        .unique();
-
-      if (!participant) {
-        const participantId = await ctx.db.insert("participants", {
-          rosterId: roster._id,
-          externalId: legacyStudent.studentId,
-          rawName: legacyStudent.rawName,
-          firstName: legacyStudent.firstName,
-          lastName: legacyStudent.lastName,
-          displayName: legacyStudent.displayName,
-          sortKey: legacyStudent.sortKey,
-          participantType: "roster_only",
-          active: legacyStudent.active,
-          createdAt: roster.createdAt,
-          updatedAt: rosterUpdatedAt,
-        });
-        participant = await ctx.db.get(participantId);
-      }
-
-      if (participant) {
-        participantIdsByStudentRef.set(legacyStudent._id, participant._id);
-      }
-    }
-
-    const sessions = await ctx.db
-      .query("sessions")
-      .withIndex("by_rosterId_createdAt", (q) => q.eq("rosterId", roster._id))
-      .collect();
-
-    for (const session of sessions) {
-      if (!session.sessionType || !session.participantMode || !session.createdByAppUserId || !session.updatedAt) {
-        await ctx.db.patch(session._id, {
-          sessionType: session.sessionType ?? "recurring_class",
-          participantMode: session.participantMode ?? "roster_only",
-          createdByAppUserId: session.createdByAppUserId ?? roster.ownerAppUserId ?? args.appUser._id,
-          openedAt: session.openedAt ?? session.createdAt,
-          updatedAt: session.updatedAt ?? session.createdAt,
-        });
-      }
-
-      const legacyAttendance = await ctx.db
-        .query("attendance")
-        .withIndex("by_sessionId", (q) => q.eq("sessionId", session._id))
-        .collect();
-
-      for (const row of legacyAttendance) {
-        const participantId = participantIdsByStudentRef.get(row.studentRef);
-        if (!participantId) {
-          continue;
-        }
-
-        const existingRecord = await ctx.db
-          .query("attendance_records")
-          .withIndex("by_sessionId_participantId", (q) =>
-            q.eq("sessionId", session._id).eq("participantId", participantId),
-          )
-          .unique();
-
-        if (existingRecord) {
-          continue;
-        }
-
-        await ctx.db.insert("attendance_records", {
-          sessionId: session._id,
-          participantId,
-          status: row.present ? "present" : "absent",
-          source: row.modifiedViaTokenType === "editor" ? "shared_editor" : "override",
-          markedAt: row.present ? row.markedAt : undefined,
-          modifiedAt: row.modifiedAt,
-        });
-      }
-    }
-  }
-}
-
 export async function requireIdentity(ctx: AuthCtx) {
   const identity = await ctx.auth.getUserIdentity();
   if (!identity) {
@@ -366,7 +233,7 @@ export async function requireCurrentAppUser(ctx: AuthCtx) {
     throw new Error("User account has not been initialized.");
   }
 
-  if (getAppUserStatus(result.appUser) !== "active") {
+  if (result.appUser.status !== "active") {
     throw new Error("User account is not active.");
   }
 
@@ -402,13 +269,7 @@ export async function ensureCurrentAppUser(ctx: MutationCtx) {
     const identityPatch: Partial<
       Pick<
         AuthIdentityDoc,
-        | "tokenIdentifier"
-        | "email"
-        | "name"
-        | "emailSnapshot"
-        | "nameSnapshot"
-        | "lastSeenAt"
-        | "updatedAt"
+        "tokenIdentifier" | "emailSnapshot" | "nameSnapshot" | "lastSeenAt" | "updatedAt"
       >
     > = {
       lastSeenAt: now,
@@ -416,12 +277,6 @@ export async function ensureCurrentAppUser(ctx: MutationCtx) {
 
     if (existingIdentity.tokenIdentifier !== identity.tokenIdentifier) {
       identityPatch.tokenIdentifier = identity.tokenIdentifier;
-    }
-    if (existingIdentity.email !== normalizedEmail) {
-      identityPatch.email = normalizedEmail;
-    }
-    if (existingIdentity.name !== identity.name) {
-      identityPatch.name = identity.name;
     }
     if (existingIdentity.emailSnapshot !== normalizedEmail) {
       identityPatch.emailSnapshot = normalizedEmail;
@@ -431,8 +286,6 @@ export async function ensureCurrentAppUser(ctx: MutationCtx) {
     }
     if (
       existingIdentity.tokenIdentifier !== identity.tokenIdentifier ||
-      existingIdentity.email !== normalizedEmail ||
-      existingIdentity.name !== identity.name ||
       existingIdentity.emailSnapshot !== normalizedEmail ||
       existingIdentity.nameSnapshot !== identity.name ||
       existingIdentity.lastSeenAt !== now
@@ -442,36 +295,19 @@ export async function ensureCurrentAppUser(ctx: MutationCtx) {
 
     await ctx.db.patch(existingIdentity._id, identityPatch);
 
-    const appUserPatch: Partial<Pick<AppUserDoc, "displayName" | "status" | "updatedAt">> = {};
     if (appUser.displayName !== displayName) {
-      appUserPatch.displayName = displayName;
-    }
-    if (!appUser.status) {
-      appUserPatch.status = "active";
-    }
-    if (!appUser.updatedAt || Object.keys(appUserPatch).length > 0) {
-      appUserPatch.updatedAt = now;
-    }
-    if (Object.keys(appUserPatch).length > 0) {
-      await ctx.db.patch(appUser._id, appUserPatch);
+      await ctx.db.patch(appUser._id, {
+        displayName,
+        updatedAt: now,
+      });
     }
 
-    const refreshedAppUser = await ctx.db.get(appUser._id);
-    const refreshedIdentity = await ctx.db.get(existingIdentity._id);
-    if (!refreshedAppUser || !refreshedIdentity) {
-      throw new Error("User account could not be loaded.");
-    }
-
+    const refreshedAppUser = (await ctx.db.get(appUser._id)) ?? appUser;
+    const refreshedIdentity = (await ctx.db.get(existingIdentity._id)) ?? existingIdentity;
     const defaultMembership = await ensureDefaultOrganizationMembership(ctx, refreshedAppUser);
-    await ensureLegacyRosterAccess(ctx, {
-      appUser: refreshedAppUser,
-      organization: defaultMembership.organization,
-      membership: defaultMembership.membership,
-    });
-    const finalAppUser = (await ctx.db.get(refreshedAppUser._id)) ?? refreshedAppUser;
 
     return toCurrentAppUserResult(
-      finalAppUser,
+      refreshedAppUser,
       refreshedIdentity,
       defaultMembership.organization,
       defaultMembership.membership,
@@ -490,8 +326,6 @@ export async function ensureCurrentAppUser(ctx: MutationCtx) {
     provider: "clerk",
     providerSubject: identity.subject,
     tokenIdentifier: identity.tokenIdentifier,
-    email: normalizedEmail,
-    name: identity.name,
     emailSnapshot: normalizedEmail,
     nameSnapshot: identity.name,
     lastSeenAt: now,
@@ -509,15 +343,9 @@ export async function ensureCurrentAppUser(ctx: MutationCtx) {
   }
 
   const defaultMembership = await ensureDefaultOrganizationMembership(ctx, appUser);
-  await ensureLegacyRosterAccess(ctx, {
-    appUser,
-    organization: defaultMembership.organization,
-    membership: defaultMembership.membership,
-  });
-  const finalAppUser = (await ctx.db.get(appUser._id)) ?? appUser;
 
   return toCurrentAppUserResult(
-    finalAppUser,
+    appUser,
     authIdentity,
     defaultMembership.organization,
     defaultMembership.membership,
@@ -550,30 +378,6 @@ export async function requireAccessibleRoster(ctx: AuthCtx, rosterId: Id<"roster
   const roster = await ctx.db.get(rosterId);
   if (!roster) {
     throw new Error("Roster not found.");
-  }
-
-  if (!roster.organizationId && roster.ownerAppUserId) {
-    const { appUser } = await requireCurrentAppUser(ctx);
-    if (roster.ownerAppUserId !== appUser._id) {
-      throw new Error("Unauthorized.");
-    }
-
-    const defaultMembership = await getDefaultOrganizationMembership(ctx, appUser);
-    if (!defaultMembership) {
-      throw new Error("No active organization membership was found.");
-    }
-
-    return {
-      roster,
-      rosterAccess: null,
-      appUser,
-      membership: defaultMembership.membership,
-      organization: defaultMembership.organization,
-    };
-  }
-
-  if (!roster.organizationId) {
-    throw new Error("Roster is missing an organization.");
   }
 
   const { appUser, membership, organization } = await requireCurrentOrganizationMembership(
