@@ -17,6 +17,7 @@ type SessionAttendanceScreenProps = {
 };
 
 type SortMode = "last" | "first" | "id";
+type SessionStudentRef = Id<"participants">;
 
 const ATTENDANCE_TAP_EXIT_MS = 160;
 
@@ -40,8 +41,8 @@ export function SessionAttendanceScreen({
   const [search, setSearch] = useState("");
   const [sortMode, setSortMode] = useState<SortMode>("last");
   const [error, setError] = useState<string | null>(null);
-  const [exitingStudentRefs, setExitingStudentRefs] = useState<Set<Id<"students">>>(() => new Set());
-  const [submittingStudentRefs, setSubmittingStudentRefs] = useState<Set<Id<"students">>>(
+  const [exitingStudentRefs, setExitingStudentRefs] = useState<Set<SessionStudentRef>>(() => new Set());
+  const [submittingStudentRefs, setSubmittingStudentRefs] = useState<Set<SessionStudentRef>>(
     () => new Set(),
   );
   const deferredSearch = useDeferredValue(search.trim().toLocaleLowerCase());
@@ -161,8 +162,8 @@ export function SessionAttendanceScreen({
   }
 
   function setStudentTransitionState(
-    studentRef: Id<"students">,
-    setter: Dispatch<SetStateAction<Set<Id<"students">>>>,
+    studentRef: SessionStudentRef,
+    setter: Dispatch<SetStateAction<Set<SessionStudentRef>>>,
     active: boolean,
   ) {
     setter((current) => {
@@ -178,7 +179,7 @@ export function SessionAttendanceScreen({
     });
   }
 
-  async function handleToggle(studentRef: Id<"students">) {
+  async function handleToggle(studentRef: SessionStudentRef) {
     if (submittingStudentRefs.has(studentRef)) {
       return;
     }

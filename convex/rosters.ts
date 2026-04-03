@@ -1,8 +1,14 @@
 import { v } from "convex/values";
 import { buildDemoRosterStudents } from "../lib/demo-data";
-import { ensureCurrentAppUser, requireCurrentAppUser, requireOwnedRoster } from "./auth";
+import {
+  ensureCurrentAppUser,
+  getCurrentAppUserWithIdentity,
+  listCurrentMemberships,
+  requireAccessibleRoster,
+  requireCurrentOrganizationMembership,
+} from "./auth";
 import type { Id } from "./model";
-import { mutation, query, type MutationCtx } from "./server";
+import { mutation, query, type MutationCtx, type QueryCtx } from "./server";
 
 const importedStudentValidator = v.object({
   studentId: v.string(),
@@ -13,19 +19,28 @@ const importedStudentValidator = v.object({
   sortKey: v.string(),
 });
 
-async function loadRosterStudents(ctx: MutationCtx, rosterId: Id<"rosters">) {
+function requireStaffAccessRole(role: "student" | "staff" | "admin") {
+  if (role === "student") {
+    throw new Error("Students cannot manage rosters.");
+  }
+
+  return role === "admin" ? "admin" : "staff";
+}
+
+async function loadRosterParticipants(ctx: QueryCtx | MutationCtx, rosterId: Id<"rosters">) {
   return ctx.db
-    .query("students")
+    .query("participants")
     .withIndex("by_rosterId_sortKey", (q) => q.eq("rosterId", rosterId))
     .collect();
 }
 
-async function syncStudentIntoOpenSessions(
+async function syncParticipantIntoOpenSessions(
   ctx: MutationCtx,
   rosterId: Id<"rosters">,
-  student: {
-    _id: Id<"students">;
-    studentId: string;
+  participant: {
+    _id: Id<"participants">;
+    linkedAppUserId?: Id<"app_users">;
+    externalId?: string;
   },
 ) {
   const rosterSessions = await ctx.db
@@ -42,9 +57,9 @@ async function syncStudentIntoOpenSessions(
 
   for (const session of openSessions) {
     const existingAttendance = await ctx.db
-      .query("attendance")
-      .withIndex("by_sessionId_studentRef", (q) =>
-        q.eq("sessionId", session._id).eq("studentRef", student._id),
+      .query("attendance_records")
+      .withIndex("by_sessionId_participantId", (q) =>
+        q.eq("sessionId", session._id).eq("participantId", participant._id),
       )
       .unique();
 
@@ -52,40 +67,46 @@ async function syncStudentIntoOpenSessions(
       continue;
     }
 
-    await ctx.db.insert("attendance", {
+    await ctx.db.insert("attendance_records", {
       sessionId: session._id,
-      studentRef: student._id,
-      studentId: student.studentId,
-      present: false,
+      participantId: participant._id,
+      linkedAppUserId: participant.linkedAppUserId,
+      status: "absent",
+      source: "override",
       modifiedAt: now,
     });
   }
 }
 
-function mapStudentsByStudentId(
-  students: Array<{
-    _id: Id<"students">;
-    studentId: string;
+function mapParticipantsByExternalId(
+  participants: Array<{
+    _id: Id<"participants">;
+    externalId?: string;
+    linkedAppUserId?: Id<"app_users">;
   }>,
 ) {
-  const duplicateStudentIds = new Set<string>();
-  const studentsByStudentId = new Map<string, (typeof students)[number]>();
+  const duplicateExternalIds = new Set<string>();
+  const participantsByExternalId = new Map<string, (typeof participants)[number]>();
 
-  for (const student of students) {
-    if (studentsByStudentId.has(student.studentId)) {
-      duplicateStudentIds.add(student.studentId);
+  for (const participant of participants) {
+    if (!participant.externalId) {
       continue;
     }
 
-    studentsByStudentId.set(student.studentId, student);
+    if (participantsByExternalId.has(participant.externalId)) {
+      duplicateExternalIds.add(participant.externalId);
+      continue;
+    }
+
+    participantsByExternalId.set(participant.externalId, participant);
   }
 
-  if (duplicateStudentIds.size > 0) {
-    const ids = [...duplicateStudentIds].sort().join(", ");
+  if (duplicateExternalIds.size > 0) {
+    const ids = [...duplicateExternalIds].sort().join(", ");
     throw new Error(`Roster already contains duplicate student IDs: ${ids}.`);
   }
 
-  return studentsByStudentId;
+  return participantsByExternalId;
 }
 
 function validateImportedStudents(
@@ -111,6 +132,55 @@ function validateImportedStudents(
   }
 }
 
+async function findAccessibleRosterMembership(
+  ctx: QueryCtx,
+  appUserId: Id<"app_users">,
+  roster: { _id: Id<"rosters">; organizationId: Id<"organizations"> },
+) {
+  const memberships = await listCurrentMemberships(ctx, appUserId);
+
+  for (const { membership } of memberships) {
+    if (membership.organizationId !== roster.organizationId) {
+      continue;
+    }
+
+    const access = await ctx.db
+      .query("roster_access")
+      .withIndex("by_rosterId_membershipId", (q) =>
+        q.eq("rosterId", roster._id).eq("membershipId", membership._id),
+      )
+      .unique();
+
+    if (access) {
+      return membership;
+    }
+  }
+
+  return null;
+}
+
+async function listAccessibleRosters(ctx: QueryCtx, appUserId: Id<"app_users">) {
+  const memberships = await listCurrentMemberships(ctx, appUserId);
+  const accessibleRosterIds = new Set<Id<"rosters">>();
+
+  for (const { membership } of memberships) {
+    const rosterAccessRows = await ctx.db
+      .query("roster_access")
+      .withIndex("by_membershipId", (q) => q.eq("membershipId", membership._id))
+      .collect();
+
+    for (const rosterAccess of rosterAccessRows) {
+      accessibleRosterIds.add(rosterAccess.rosterId);
+    }
+  }
+
+  const rosters = await Promise.all([...accessibleRosterIds].map((rosterId) => ctx.db.get(rosterId)));
+
+  return rosters
+    .filter((roster): roster is NonNullable<typeof roster> => roster !== null)
+    .sort((left, right) => right.createdAt - left.createdAt);
+}
+
 export const list = query({
   args: {},
   returns: v.array(
@@ -125,18 +195,18 @@ export const list = query({
     }),
   ),
   handler: async (ctx) => {
-    const { appUser } = await requireCurrentAppUser(ctx);
-    const rosters = await ctx.db
-      .query("rosters")
-      .withIndex("by_ownerAppUserId_createdAt", (q) => q.eq("ownerAppUserId", appUser._id))
-      .order("desc")
-      .collect();
+    const { appUser } = await getCurrentAppUserWithIdentity(ctx);
+    if (!appUser) {
+      return [];
+    }
+
+    const rosters = await listAccessibleRosters(ctx, appUser._id);
 
     return Promise.all(
       rosters.map(async (roster) => {
-        const [students, sessions] = await Promise.all([
+        const [participants, sessions] = await Promise.all([
           ctx.db
-            .query("students")
+            .query("participants")
             .withIndex("by_rosterId_active_sortKey", (q) =>
               q.eq("rosterId", roster._id).eq("active", true),
             )
@@ -153,7 +223,7 @@ export const list = query({
           _id: roster._id,
           name: roster.name,
           createdAt: roster.createdAt,
-          studentCount: students.length,
+          studentCount: participants.length,
           sessionCount: sessions.length,
           hasActiveSession: sessions.some((session) => session.isOpen),
           latestSessionId: latestSession?._id,
@@ -175,7 +245,7 @@ export const getById = query({
       }),
       students: v.array(
         v.object({
-          _id: v.id("students"),
+          _id: v.id("participants"),
           studentId: v.string(),
           rawName: v.string(),
           firstName: v.string(),
@@ -197,15 +267,23 @@ export const getById = query({
     }),
   ),
   handler: async (ctx, args) => {
-    const { appUser } = await requireCurrentAppUser(ctx);
-    const roster = await ctx.db.get(args.rosterId);
-    if (!roster || !roster.ownerAppUserId || roster.ownerAppUserId !== appUser._id) {
+    const [{ appUser }, roster] = await Promise.all([
+      getCurrentAppUserWithIdentity(ctx),
+      ctx.db.get(args.rosterId),
+    ]);
+
+    if (!appUser || !roster) {
       return null;
     }
 
-    const [students, sessions] = await Promise.all([
+    const membership = await findAccessibleRosterMembership(ctx, appUser._id, roster);
+    if (!membership) {
+      return null;
+    }
+
+    const [participants, sessions] = await Promise.all([
       ctx.db
-        .query("students")
+        .query("participants")
         .withIndex("by_rosterId_active_sortKey", (q) =>
           q.eq("rosterId", args.rosterId).eq("active", true),
         )
@@ -222,14 +300,14 @@ export const getById = query({
         name: roster.name,
         createdAt: roster.createdAt,
       },
-      students: students.map((student) => ({
-        _id: student._id,
-        studentId: student.studentId,
-        rawName: student.rawName,
-        firstName: student.firstName,
-        lastName: student.lastName,
-        displayName: student.displayName,
-        active: student.active,
+      students: participants.map((participant) => ({
+        _id: participant._id,
+        studentId: participant.externalId ?? "",
+        rawName: participant.rawName,
+        firstName: participant.firstName,
+        lastName: participant.lastName,
+        displayName: participant.displayName,
+        active: participant.active,
       })),
       sessions: sessions
         .sort((left, right) => right.createdAt - left.createdAt)
@@ -250,16 +328,30 @@ export const createEmpty = mutation({
   returns: v.id("rosters"),
   handler: async (ctx, args) => {
     const currentUser = await ensureCurrentAppUser(ctx);
+    const { membership, organization } = await requireCurrentOrganizationMembership(ctx);
     const name = args.name.trim();
     if (!name) {
       throw new Error("Roster name is required.");
     }
 
-    return ctx.db.insert("rosters", {
-      ownerAppUserId: currentUser._id,
+    const now = Date.now();
+    const rosterId = await ctx.db.insert("rosters", {
+      organizationId: organization._id,
+      createdByAppUserId: currentUser._id,
       name,
-      createdAt: Date.now(),
+      createdAt: now,
+      updatedAt: now,
     });
+
+    await ctx.db.insert("roster_access", {
+      rosterId,
+      membershipId: membership._id,
+      accessRole: requireStaffAccessRole(membership.role),
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    return rosterId;
   },
 });
 
@@ -271,6 +363,7 @@ export const importCsv = mutation({
   returns: v.id("rosters"),
   handler: async (ctx, args) => {
     const currentUser = await ensureCurrentAppUser(ctx);
+    const { membership, organization } = await requireCurrentOrganizationMembership(ctx);
     const name = args.name.trim();
     if (!name) {
       throw new Error("Roster name is required.");
@@ -278,22 +371,36 @@ export const importCsv = mutation({
 
     validateImportedStudents(args.students);
 
+    const now = Date.now();
     const rosterId = await ctx.db.insert("rosters", {
-      ownerAppUserId: currentUser._id,
+      organizationId: organization._id,
+      createdByAppUserId: currentUser._id,
       name,
-      createdAt: Date.now(),
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    await ctx.db.insert("roster_access", {
+      rosterId,
+      membershipId: membership._id,
+      accessRole: requireStaffAccessRole(membership.role),
+      createdAt: now,
+      updatedAt: now,
     });
 
     for (const student of args.students) {
-      await ctx.db.insert("students", {
+      await ctx.db.insert("participants", {
         rosterId,
-        studentId: student.studentId,
+        externalId: student.studentId,
         rawName: student.rawName,
         firstName: student.firstName,
         lastName: student.lastName,
         displayName: student.displayName,
         sortKey: student.sortKey,
+        participantType: "roster_only",
         active: true,
+        createdAt: now,
+        updatedAt: now,
       });
     }
 
@@ -308,14 +415,14 @@ export const rename = mutation({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
-    await requireOwnedRoster(ctx, args.rosterId);
+    await requireAccessibleRoster(ctx, args.rosterId);
 
     const name = args.name.trim();
     if (!name) {
       throw new Error("Roster name is required.");
     }
 
-    await ctx.db.patch(args.rosterId, { name });
+    await ctx.db.patch(args.rosterId, { name, updatedAt: Date.now() });
     return null;
   },
 });
@@ -329,7 +436,7 @@ export const importIntoExisting = mutation({
   },
   returns: v.id("rosters"),
   handler: async (ctx, args) => {
-    await requireOwnedRoster(ctx, args.rosterId);
+    await requireAccessibleRoster(ctx, args.rosterId);
 
     const name = args.name.trim();
     if (!name) {
@@ -338,51 +445,66 @@ export const importIntoExisting = mutation({
 
     validateImportedStudents(args.students);
 
-    const existingStudents = await loadRosterStudents(ctx, args.rosterId);
-    const existingByStudentId = mapStudentsByStudentId(existingStudents);
+    const existingParticipants = await loadRosterParticipants(ctx, args.rosterId);
+    const existingByExternalId = mapParticipantsByExternalId(existingParticipants);
+    const now = Date.now();
 
-    await ctx.db.patch(args.rosterId, { name });
+    await ctx.db.patch(args.rosterId, { name, updatedAt: now });
 
     if (args.deactivateMissing) {
       const incomingIds = new Set(args.students.map((student) => student.studentId));
-      for (const existingStudent of existingStudents) {
-        if (!incomingIds.has(existingStudent.studentId) && existingStudent.active) {
-          await ctx.db.patch(existingStudent._id, { active: false });
+      for (const existingParticipant of existingParticipants) {
+        if (
+          existingParticipant.externalId &&
+          !incomingIds.has(existingParticipant.externalId) &&
+          existingParticipant.active
+        ) {
+          await ctx.db.patch(existingParticipant._id, {
+            active: false,
+            updatedAt: now,
+          });
         }
       }
     }
 
     for (const student of args.students) {
-      const existingStudent = existingByStudentId.get(student.studentId);
-      if (existingStudent) {
-        await ctx.db.patch(existingStudent._id, {
+      const existingParticipant = existingByExternalId.get(student.studentId);
+      if (existingParticipant) {
+        await ctx.db.patch(existingParticipant._id, {
+          externalId: student.studentId,
           rawName: student.rawName,
           firstName: student.firstName,
           lastName: student.lastName,
           displayName: student.displayName,
           sortKey: student.sortKey,
+          participantType: existingParticipant.linkedAppUserId ? "identified_user" : "roster_only",
           active: true,
+          updatedAt: now,
         });
-        await syncStudentIntoOpenSessions(ctx, args.rosterId, {
-          _id: existingStudent._id,
-          studentId: student.studentId,
+        await syncParticipantIntoOpenSessions(ctx, args.rosterId, {
+          _id: existingParticipant._id,
+          linkedAppUserId: existingParticipant.linkedAppUserId,
+          externalId: student.studentId,
         });
         continue;
       }
 
-      const studentId = await ctx.db.insert("students", {
+      const participantId = await ctx.db.insert("participants", {
         rosterId: args.rosterId,
-        studentId: student.studentId,
+        externalId: student.studentId,
         rawName: student.rawName,
         firstName: student.firstName,
         lastName: student.lastName,
         displayName: student.displayName,
         sortKey: student.sortKey,
+        participantType: "roster_only",
         active: true,
+        createdAt: now,
+        updatedAt: now,
       });
-      await syncStudentIntoOpenSessions(ctx, args.rosterId, {
-        _id: studentId,
-        studentId: student.studentId,
+      await syncParticipantIntoOpenSessions(ctx, args.rosterId, {
+        _id: participantId,
+        externalId: student.studentId,
       });
     }
 
@@ -395,22 +517,37 @@ export const seedDemo = mutation({
   returns: v.id("rosters"),
   handler: async (ctx) => {
     const currentUser = await ensureCurrentAppUser(ctx);
+    const { membership, organization } = await requireCurrentOrganizationMembership(ctx);
+    const now = Date.now();
     const rosterId = await ctx.db.insert("rosters", {
-      ownerAppUserId: currentUser._id,
+      organizationId: organization._id,
+      createdByAppUserId: currentUser._id,
       name: "Grade 8 Homeroom Demo",
-      createdAt: Date.now(),
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    await ctx.db.insert("roster_access", {
+      rosterId,
+      membershipId: membership._id,
+      accessRole: requireStaffAccessRole(membership.role),
+      createdAt: now,
+      updatedAt: now,
     });
 
     for (const student of buildDemoRosterStudents()) {
-      await ctx.db.insert("students", {
+      await ctx.db.insert("participants", {
         rosterId,
-        studentId: student.studentId,
+        externalId: student.studentId,
         rawName: student.rawName,
         firstName: student.firstName,
         lastName: student.lastName,
         displayName: student.displayName,
         sortKey: student.sortKey,
+        participantType: "roster_only",
         active: true,
+        createdAt: now,
+        updatedAt: now,
       });
     }
 
@@ -424,19 +561,23 @@ export const remove = mutation({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
-    await requireOwnedRoster(ctx, args.rosterId);
+    await requireAccessibleRoster(ctx, args.rosterId);
 
-    const [students, sessions] = await Promise.all([
-      loadRosterStudents(ctx, args.rosterId),
+    const [participants, sessions, rosterAccessRows] = await Promise.all([
+      loadRosterParticipants(ctx, args.rosterId),
       ctx.db
         .query("sessions")
         .withIndex("by_rosterId_createdAt", (q) => q.eq("rosterId", args.rosterId))
+        .collect(),
+      ctx.db
+        .query("roster_access")
+        .withIndex("by_rosterId", (q) => q.eq("rosterId", args.rosterId))
         .collect(),
     ]);
 
     for (const session of sessions) {
       const attendanceRows = await ctx.db
-        .query("attendance")
+        .query("attendance_records")
         .withIndex("by_sessionId", (q) => q.eq("sessionId", session._id))
         .collect();
 
@@ -447,8 +588,12 @@ export const remove = mutation({
       await ctx.db.delete(session._id);
     }
 
-    for (const student of students) {
-      await ctx.db.delete(student._id);
+    for (const participant of participants) {
+      await ctx.db.delete(participant._id);
+    }
+
+    for (const rosterAccess of rosterAccessRows) {
+      await ctx.db.delete(rosterAccess._id);
     }
 
     await ctx.db.delete(args.rosterId);

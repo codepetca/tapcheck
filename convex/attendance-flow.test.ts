@@ -262,10 +262,19 @@ describe("attendance flow while editing an existing roster", () => {
     });
 
     await t.run(async (ctx) => {
-      await ctx.db.insert("students", {
+      const duplicate = makeStudent("1001", "Alice Duplicate");
+      await ctx.db.insert("participants", {
         rosterId,
-        ...makeStudent("1001", "Alice Duplicate"),
+        externalId: duplicate.studentId,
+        rawName: duplicate.rawName,
+        firstName: duplicate.firstName,
+        lastName: duplicate.lastName,
+        displayName: duplicate.displayName,
+        sortKey: duplicate.sortKey,
+        participantType: "roster_only",
         active: true,
+        createdAt: 1,
+        updatedAt: 1,
       });
     });
 

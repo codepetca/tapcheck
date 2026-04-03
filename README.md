@@ -14,14 +14,15 @@ Realtime mobile attendance for teachers taking attendance at the classroom door.
 
 - Clerk handles sign-in, sign-up, password auth, and Google OAuth
 - Tapcheck keeps internal `app_users` and `auth_identities` tables
-- Each roster is owned by one internal app user
+- Convex stores canonical organizations, memberships, and roster access
+- Rosters are organization-owned and access is granted through `roster_access`
 - Dashboard and roster management routes require authentication
 - Session editor token routes such as `/s/edit/[token]` stay public
 
 ## Features
 
 - Roster list and roster detail pages
-- Per-user roster isolation
+- Organization-scoped roster access
 - CSV import flow with:
   - file upload
   - column mapping for name and student ID
@@ -71,7 +72,10 @@ lib/
 ### `app_users`
 
 - `displayName`
+- `status`
+- `defaultOrganizationId`
 - `createdAt`
+- `updatedAt`
 
 ### `auth_identities`
 
@@ -79,49 +83,87 @@ lib/
 - `provider`
 - `providerSubject`
 - `tokenIdentifier`
-- `email`
+- `emailSnapshot`
+- `nameSnapshot`
+- `lastSeenAt`
+- `createdAt`
+- `updatedAt`
+
+### `organizations`
+
 - `name`
+- `slug`
+- `status`
+- `createdAt`
+- `updatedAt`
+
+### `organization_memberships`
+
+- `appUserId`
+- `organizationId`
+- `role`
+- `status`
+- `createdAt`
+- `updatedAt`
+
+### `roster_access`
+
+- `rosterId`
+- `membershipId`
+- `accessRole`
 - `createdAt`
 - `updatedAt`
 
 ### `rosters`
 
-- `ownerAppUserId`
+- `organizationId`
+- `createdByAppUserId`
 - `name`
 - `createdAt`
+- `updatedAt`
 
-### `students`
+### `participants`
 
 - `rosterId`
-- `studentId`
+- `linkedAppUserId`
+- `externalId`
 - `rawName`
 - `firstName`
 - `lastName`
 - `displayName`
 - `sortKey`
+- `participantType`
 - `active`
+- `createdAt`
+- `updatedAt`
 
 ### `sessions`
 
 - `rosterId`
 - `title`
 - `date`
+- `sessionType`
+- `participantMode`
 - `isOpen`
+- `createdByAppUserId`
 - `editorToken`
+- `openedAt`
+- `closedAt`
 - `createdAt`
+- `updatedAt`
 
-### `attendance`
+### `attendance_records`
 
 - `sessionId`
-- `studentRef`
-- `studentId`
-- `present`
+- `participantId`
+- `linkedAppUserId`
+- `status`
+- `source`
 - `markedAt`
-- `lastModifiedAt`
 - `modifiedAt`
-- `modifiedViaTokenType`
+- `modifiedByAppUserId`
 
-This app uses one attendance record per student per session.
+This app uses one attendance record per participant per session.
 
 ## Setup
 
@@ -175,7 +217,7 @@ Open [http://localhost:3000](http://localhost:3000).
 
 1. Open `/sign-up`.
 2. Create a Clerk account.
-3. Return to the dashboard and confirm you can create a roster.
+3. Return to the dashboard and confirm the app creates your internal user, default organization, and membership.
 4. Open another browser profile or incognito window with a different account to verify the first roster is hidden there.
 
 ### CSV import
@@ -205,6 +247,45 @@ pnpm typecheck
 pnpm build
 ```
 
+## Manual smoke test
+
+Use this after resetting the dev deployment or changing auth/bootstrap logic.
+
+1. Start Convex and Next.js:
+
+```bash
+pnpm convex:dev
+pnpm dev
+```
+
+2. Open `http://localhost:3000` in a fresh browser profile or incognito window.
+3. Sign up or sign in through Clerk.
+4. Confirm you land on the dashboard without a bootstrap error.
+5. In another terminal, verify the canonical identity rows exist:
+
+```bash
+npx convex data app_users --limit 5 --format pretty
+npx convex data organizations --limit 5 --format pretty
+npx convex data organization_memberships --limit 5 --format pretty
+```
+
+6. Create a roster and confirm it appears in the dashboard.
+7. Verify the roster created the expected access row:
+
+```bash
+npx convex data rosters --limit 5 --format pretty
+npx convex data roster_access --limit 5 --format pretty
+```
+
+8. Open the roster, start a session, and confirm the editor link loads.
+9. Mark one participant present and verify attendance was written:
+
+```bash
+npx convex data attendance_records --limit 10 --format pretty
+```
+
+10. Open a second browser profile with a different Clerk account and confirm the first roster is not visible there.
+
 ## AI Workflow
 
 - Start with [docs/system/app-dna.md](docs/system/app-dna.md) and [docs/system/product-principles.md](docs/system/product-principles.md) for product and UI guardrails.
@@ -217,6 +298,7 @@ pnpm build
 ## Notes
 
 - Dashboard access requires Clerk authentication.
+- Authorization lives in Convex, not in Clerk role claims.
 - Public session editing still relies on unguessable editor tokens.
 - Invalid share links show a friendly invalid-link state.
 - The app renders a setup screen until `NEXT_PUBLIC_CONVEX_URL` is configured.

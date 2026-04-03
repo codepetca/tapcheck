@@ -2,15 +2,18 @@
 
 ## Purpose
 
-Tapcheck is a mobile-first classroom attendance app. Authenticated staff users create and manage their own rosters, while live attendance collection still happens through editor token links.
+Tapcheck is a mobile-first classroom attendance app. It is now the first consumer of a shared identity platform implemented in Convex, while live attendance collection still happens through editor token links.
 
 ## Auth Architecture
 
 - Clerk is the authentication provider for the Next.js app.
 - Tapcheck does not use Clerk user IDs as domain ownership IDs.
-- Internal identity is modeled with Convex tables:
+- Internal identity and authorization are modeled with Convex tables:
   - `app_users`
   - `auth_identities`
+  - `organizations`
+  - `organization_memberships`
+  - `roster_access`
 - `auth_identities` links the external Clerk identity to the internal `app_users` record.
 - Resolve the current user in Convex from `ctx.auth.getUserIdentity()` and `tokenIdentifier`, not from any client-supplied user identifier.
 - `email` is optional in auth-linked identity snapshots because Clerk claims reaching Convex may omit it.
@@ -20,22 +23,23 @@ Tapcheck is a mobile-first classroom attendance app. Authenticated staff users c
 - Dashboard routes are authenticated.
 - Public auth routes are `/sign-in` and `/sign-up`.
 - Public attendance collection remains available at `/s/edit/[token]`.
-- Roster ownership is enforced through `rosters.ownerAppUserId`.
-- A signed-in user may only list, read, create, rename, import into, delete, or run sessions for their own rosters.
-- There is no admin or support role in the current MVP auth model.
+- Rosters are organization-owned.
+- Access is enforced through active `organization_memberships` plus explicit `roster_access`.
+- Canonical roles are `student`, `staff`, and `admin`.
 
 ## Current Backend Conventions
 
-- Keep the existing domain tables:
+- Current domain tables are:
   - `rosters`
-  - `students`
+  - `participants`
   - `sessions`
-  - `attendance`
-- Do not rename attendance tables or introduce a broader multi-provider abstraction unless the task explicitly requires it.
+  - `attendance_records`
 - Use shared Convex auth helpers for:
   - current app user bootstrap
   - current user lookup
-  - roster ownership checks
+  - organization membership checks
+  - roster access checks
+- This branch does not preserve legacy local Convex data. If the schema changes incompatibly during local development, reset or reseed the local dataset instead of reintroducing compatibility layers unless the task explicitly requires a migration-safe rollout.
 
 ## Current Frontend Conventions
 
@@ -48,6 +52,7 @@ Tapcheck is a mobile-first classroom attendance app. Authenticated staff users c
 
 - Do implementation work from git worktrees under `/Users/stew/Repos/.worktrees/tapcheck/`, not from the hub checkout.
 - For every new worktree, symlink `.env.local` to `/Users/stew/Repos/tapcheck/.env.local` so Clerk and Convex local environment settings stay consistent across worktrees.
+- Install dependencies inside each worktree with `pnpm install`. Do not symlink `node_modules` from the hub checkout into a worktree; Next.js 16/Turbopack will crash when the symlink points outside the worktree root.
 
 ## Testing Harness
 
@@ -65,7 +70,7 @@ Tapcheck is a mobile-first classroom attendance app. Authenticated staff users c
   - shared primitives used across screens
 - For auth and ownership work, add or update tests that prove:
   - user bootstrap behavior
-  - owner-only access boundaries
+  - org membership and roster-access boundaries
   - public token routes remain public
 - Before closing substantial work, run the relevant local checks, usually:
   - `pnpm test`

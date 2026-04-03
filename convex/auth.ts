@@ -4,6 +4,11 @@ import type { MutationCtx, QueryCtx } from "./server";
 
 type AuthCtx = Pick<QueryCtx, "auth" | "db"> | Pick<MutationCtx, "auth" | "db">;
 
+type AuthIdentityDoc = Doc<"auth_identities">;
+type AppUserDoc = Doc<"app_users">;
+type MembershipDoc = Doc<"organization_memberships">;
+type OrganizationDoc = Doc<"organizations">;
+
 function normalizeEmail(email: string) {
   return email.trim().toLocaleLowerCase();
 }
@@ -21,21 +26,51 @@ function getDisplayName(identity: UserIdentity) {
   return identity.subject;
 }
 
-type AuthIdentityDoc = Doc<"auth_identities">;
-type AppUserDoc = Doc<"app_users">;
+function slugify(value: string) {
+  return value
+    .trim()
+    .toLocaleLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40);
+}
 
-function toCurrentAppUserResult(appUser: AppUserDoc, authIdentity: AuthIdentityDoc | null) {
+function buildOrganizationName(displayName: string) {
+  const trimmed = displayName.trim();
+  return trimmed ? `${trimmed}'s workspace` : "Tapcheck workspace";
+}
+
+function buildOrganizationSlug(displayName: string, appUserId: Id<"app_users">) {
+  const base = slugify(displayName) || "tapcheck-workspace";
+  return `${base}-${String(appUserId).slice(-8).toLocaleLowerCase()}`;
+}
+
+function toCurrentAppUserResult(
+  appUser: AppUserDoc,
+  authIdentity: AuthIdentityDoc | null,
+  organization: OrganizationDoc | null,
+  membership: MembershipDoc | null,
+) {
   return {
     _id: appUser._id,
     displayName: appUser.displayName,
+    status: appUser.status,
     createdAt: appUser.createdAt,
     identity: authIdentity
       ? {
           provider: authIdentity.provider,
-          email: authIdentity.email,
-          name: authIdentity.name,
+          email: authIdentity.emailSnapshot,
+          name: authIdentity.nameSnapshot,
         }
       : undefined,
+    defaultOrganization:
+      organization && membership
+        ? {
+            _id: organization._id,
+            name: organization.name,
+            role: membership.role,
+          }
+        : undefined,
   };
 }
 
@@ -46,6 +81,121 @@ async function getAuthIdentityByProviderSubject(ctx: AuthCtx, providerSubject: s
       q.eq("provider", "clerk").eq("providerSubject", providerSubject),
     )
     .unique();
+}
+
+async function getActiveMembership(
+  ctx: AuthCtx,
+  appUserId: Id<"app_users">,
+  organizationId: Id<"organizations">,
+) {
+  const membership = await ctx.db
+    .query("organization_memberships")
+    .withIndex("by_appUserId_organizationId", (q) =>
+      q.eq("appUserId", appUserId).eq("organizationId", organizationId),
+    )
+    .unique();
+
+  if (!membership || membership.status !== "active") {
+    return null;
+  }
+
+  const organization = await ctx.db.get(organizationId);
+  if (!organization || organization.status !== "active") {
+    return null;
+  }
+
+  return {
+    membership,
+    organization,
+  };
+}
+
+export async function listCurrentMemberships(ctx: AuthCtx, appUserId: Id<"app_users">) {
+  const memberships = await ctx.db
+    .query("organization_memberships")
+    .withIndex("by_appUserId_status", (q) => q.eq("appUserId", appUserId).eq("status", "active"))
+    .collect();
+
+  const resolved = await Promise.all(
+    memberships.map(async (membership) => {
+      const organization = await ctx.db.get(membership.organizationId);
+      if (!organization || organization.status !== "active") {
+        return null;
+      }
+
+      return {
+        membership,
+        organization,
+      };
+    }),
+  );
+
+  return resolved.filter(
+    (entry): entry is { membership: MembershipDoc; organization: OrganizationDoc } => entry !== null,
+  );
+}
+
+async function getDefaultOrganizationMembership(ctx: AuthCtx, appUser: AppUserDoc) {
+  if (appUser.defaultOrganizationId) {
+    const existing = await getActiveMembership(ctx, appUser._id, appUser.defaultOrganizationId);
+    if (existing) {
+      return existing;
+    }
+  }
+
+  const memberships = await listCurrentMemberships(ctx, appUser._id);
+  return memberships[0] ?? null;
+}
+
+async function ensureDefaultOrganizationMembership(ctx: MutationCtx, appUser: AppUserDoc) {
+  const existing = await getDefaultOrganizationMembership(ctx, appUser);
+  if (existing) {
+    if (appUser.defaultOrganizationId !== existing.organization._id) {
+      await ctx.db.patch(appUser._id, {
+        defaultOrganizationId: existing.organization._id,
+        updatedAt: Date.now(),
+      });
+    }
+
+    return existing;
+  }
+
+  const now = Date.now();
+  const organizationId = await ctx.db.insert("organizations", {
+    name: buildOrganizationName(appUser.displayName),
+    slug: buildOrganizationSlug(appUser.displayName, appUser._id),
+    status: "active",
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  const membershipId = await ctx.db.insert("organization_memberships", {
+    appUserId: appUser._id,
+    organizationId,
+    role: "admin",
+    status: "active",
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  await ctx.db.patch(appUser._id, {
+    defaultOrganizationId: organizationId,
+    updatedAt: now,
+  });
+
+  const [organization, membership] = await Promise.all([
+    ctx.db.get(organizationId),
+    ctx.db.get(membershipId),
+  ]);
+
+  if (!organization || !membership) {
+    throw new Error("Default organization could not be created.");
+  }
+
+  return {
+    organization,
+    membership,
+  };
 }
 
 export async function requireIdentity(ctx: AuthCtx) {
@@ -66,11 +216,14 @@ export async function getCurrentAppUserWithIdentity(ctx: AuthCtx) {
     .unique();
 
   const appUser = authIdentity ? await ctx.db.get(authIdentity.appUserId) : null;
+  const defaultMembership = appUser ? await getDefaultOrganizationMembership(ctx, appUser) : null;
 
   return {
     identity,
     authIdentity,
     appUser,
+    defaultOrganization: defaultMembership?.organization ?? null,
+    defaultMembership: defaultMembership?.membership ?? null,
   };
 }
 
@@ -80,10 +233,16 @@ export async function requireCurrentAppUser(ctx: AuthCtx) {
     throw new Error("User account has not been initialized.");
   }
 
+  if (result.appUser.status !== "active") {
+    throw new Error("User account is not active.");
+  }
+
   return {
     identity: result.identity,
     authIdentity: result.authIdentity,
     appUser: result.appUser,
+    defaultOrganization: result.defaultOrganization,
+    defaultMembership: result.defaultMembership,
   };
 }
 
@@ -107,39 +266,59 @@ export async function ensureCurrentAppUser(ctx: MutationCtx) {
       throw new Error("Linked app user was not found.");
     }
 
-    const identityPatch: Partial<AuthIdentityDoc> = {};
+    const identityPatch: Partial<
+      Pick<
+        AuthIdentityDoc,
+        "tokenIdentifier" | "emailSnapshot" | "nameSnapshot" | "lastSeenAt" | "updatedAt"
+      >
+    > = {
+      lastSeenAt: now,
+    };
+
     if (existingIdentity.tokenIdentifier !== identity.tokenIdentifier) {
       identityPatch.tokenIdentifier = identity.tokenIdentifier;
     }
-    if (existingIdentity.email !== normalizedEmail) {
-      identityPatch.email = normalizedEmail;
+    if (existingIdentity.emailSnapshot !== normalizedEmail) {
+      identityPatch.emailSnapshot = normalizedEmail;
     }
-    if (existingIdentity.name !== identity.name) {
-      identityPatch.name = identity.name;
+    if (existingIdentity.nameSnapshot !== identity.name) {
+      identityPatch.nameSnapshot = identity.name;
     }
-    if (Object.keys(identityPatch).length > 0) {
+    if (
+      existingIdentity.tokenIdentifier !== identity.tokenIdentifier ||
+      existingIdentity.emailSnapshot !== normalizedEmail ||
+      existingIdentity.nameSnapshot !== identity.name ||
+      existingIdentity.lastSeenAt !== now
+    ) {
       identityPatch.updatedAt = now;
-      await ctx.db.patch(existingIdentity._id, identityPatch);
     }
+
+    await ctx.db.patch(existingIdentity._id, identityPatch);
 
     if (appUser.displayName !== displayName) {
       await ctx.db.patch(appUser._id, {
         displayName,
+        updatedAt: now,
       });
     }
 
-    const refreshedAppUser = await ctx.db.get(appUser._id);
-    const refreshedIdentity = await ctx.db.get(existingIdentity._id);
-    if (!refreshedAppUser || !refreshedIdentity) {
-      throw new Error("User account could not be loaded.");
-    }
+    const refreshedAppUser = (await ctx.db.get(appUser._id)) ?? appUser;
+    const refreshedIdentity = (await ctx.db.get(existingIdentity._id)) ?? existingIdentity;
+    const defaultMembership = await ensureDefaultOrganizationMembership(ctx, refreshedAppUser);
 
-    return toCurrentAppUserResult(refreshedAppUser, refreshedIdentity);
+    return toCurrentAppUserResult(
+      refreshedAppUser,
+      refreshedIdentity,
+      defaultMembership.organization,
+      defaultMembership.membership,
+    );
   }
 
   const appUserId = await ctx.db.insert("app_users", {
     displayName,
+    status: "active",
     createdAt: now,
+    updatedAt: now,
   });
 
   const authIdentityId = await ctx.db.insert("auth_identities", {
@@ -147,8 +326,9 @@ export async function ensureCurrentAppUser(ctx: MutationCtx) {
     provider: "clerk",
     providerSubject: identity.subject,
     tokenIdentifier: identity.tokenIdentifier,
-    email: normalizedEmail,
-    name: identity.name,
+    emailSnapshot: normalizedEmail,
+    nameSnapshot: identity.name,
+    lastSeenAt: now,
     createdAt: now,
     updatedAt: now,
   });
@@ -162,26 +342,74 @@ export async function ensureCurrentAppUser(ctx: MutationCtx) {
     throw new Error("User account could not be created.");
   }
 
-  return toCurrentAppUserResult(appUser, authIdentity);
+  const defaultMembership = await ensureDefaultOrganizationMembership(ctx, appUser);
+
+  return toCurrentAppUserResult(
+    appUser,
+    authIdentity,
+    defaultMembership.organization,
+    defaultMembership.membership,
+  );
 }
 
-export async function requireOwnedRoster(ctx: AuthCtx, rosterId: Id<"rosters">) {
-  const [roster, { appUser }] = await Promise.all([ctx.db.get(rosterId), requireCurrentAppUser(ctx)]);
+export async function requireCurrentOrganizationMembership(
+  ctx: AuthCtx,
+  organizationId?: Id<"organizations">,
+) {
+  const { appUser } = await requireCurrentAppUser(ctx);
 
+  const resolved =
+    organizationId
+      ? await getActiveMembership(ctx, appUser._id, organizationId)
+      : await getDefaultOrganizationMembership(ctx, appUser);
+
+  if (!resolved) {
+    throw new Error("No active organization membership was found.");
+  }
+
+  return {
+    appUser,
+    membership: resolved.membership,
+    organization: resolved.organization,
+  };
+}
+
+export async function requireAccessibleRoster(ctx: AuthCtx, rosterId: Id<"rosters">) {
+  const roster = await ctx.db.get(rosterId);
   if (!roster) {
     throw new Error("Roster not found.");
   }
 
-  if (!roster.ownerAppUserId || roster.ownerAppUserId !== appUser._id) {
+  const { appUser, membership, organization } = await requireCurrentOrganizationMembership(
+    ctx,
+    roster.organizationId,
+  );
+
+  const rosterAccess = await ctx.db
+    .query("roster_access")
+    .withIndex("by_rosterId_membershipId", (q) =>
+      q.eq("rosterId", rosterId).eq("membershipId", membership._id),
+    )
+    .unique();
+
+  if (!rosterAccess) {
     throw new Error("Unauthorized.");
   }
 
   return {
     roster,
+    rosterAccess,
     appUser,
+    membership,
+    organization,
   };
 }
 
-export function getCurrentAppUserResult(appUser: AppUserDoc, authIdentity: AuthIdentityDoc | null) {
-  return toCurrentAppUserResult(appUser, authIdentity);
+export function getCurrentAppUserResult(
+  appUser: AppUserDoc,
+  authIdentity: AuthIdentityDoc | null,
+  organization: OrganizationDoc | null,
+  membership: MembershipDoc | null,
+) {
+  return toCurrentAppUserResult(appUser, authIdentity, organization, membership);
 }
