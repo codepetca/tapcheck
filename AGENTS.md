@@ -18,3 +18,9 @@ For UI work, preserve the existing minimal Tapcheck aesthetic, prefer primitive 
 
 Use git worktrees for repo changes rather than working directly in the hub checkout. Create Tapcheck worktrees under `/Users/stew/Repos/.worktrees/tapcheck/`.
 For each new worktree, replace the worktree-local `.env.local` with a symlink to the hub repo env file at `/Users/stew/Repos/tapcheck/.env.local` so local Clerk and Convex configuration stays shared across worktrees.
+
+For non-trivial feature work, use `docs/workflow/feature-brief.md` before implementation and keep the brief short.
+When working from GitHub issues, automatically create a lightweight brief for medium or large issues and skip briefs for trivial issues.
+After meaningful milestones, run `docs/workflow/post-implementation-review.md` and `docs/system/screen-review-rubric.md` to capture improvements without reopening the whole feature.
+Use `docs/system/app-dna.md`, `docs/system/product-principles.md`, `docs/system/ui-patterns.md`, and `docs/system/anti-patterns.md` as the lightweight product and UI consistency guardrails.
+If a workflow repeats 3+ times, becomes a reusable multi-step pattern, or looks like a good automation candidate, suggest a skill per `docs/system/skill-creation.md` and ask for approval before creating it.

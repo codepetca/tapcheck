@@ -7,3 +7,10 @@ When working on Convex code, **always read `convex/_generated/ai/guidelines.md` 
 
 Convex agent skills for common tasks can be installed by running `npx convex ai-files install`.
 <!-- convex-ai-end -->
+
+Use `docs/system/app-dna.md` and `docs/system/product-principles.md` for product direction.
+Use `docs/workflow/feature-brief.md` before non-trivial implementation work.
+When working from GitHub issues, automatically create a concise brief for medium or large issues and skip it for trivial issues.
+Use `docs/workflow/post-implementation-review.md` and `docs/system/screen-review-rubric.md` after meaningful milestones.
+Reuse `docs/system/ui-patterns.md` and `docs/system/anti-patterns.md` before inventing new UI structure.
+Suggest new skills with `docs/system/skill-creation.md` only after repeated evidence and always ask for approval first.
