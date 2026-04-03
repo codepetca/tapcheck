@@ -1,5 +1,5 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionAttendanceScreen } from "./session-attendance-screen";
 
 const mockUseQuery = vi.fn();
@@ -76,6 +76,30 @@ describe("SessionAttendanceScreen", () => {
     });
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("shows a loading shell before the token query resolves", () => {
+    mockUseQuery.mockReturnValue(undefined);
+
+    const { container } = render(<SessionAttendanceScreen token="editor-token-1" />);
+
+    expect(screen.queryByRole("heading", { name: "Homeroom" })).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("Search name or student ID")).not.toBeInTheDocument();
+    expect(container.querySelector(".animate-pulse")).not.toBeNull();
+  });
+
+  it("shows an invalid-link state when the editor token is unavailable", () => {
+    mockUseQuery.mockReturnValue(null);
+
+    render(<SessionAttendanceScreen token="editor-token-1" />);
+
+    expect(screen.getByText("This attendance link is not available.")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Go to rosters" })).toHaveAttribute("href", "/");
+    expect(screen.queryByPlaceholderText("Search name or student ID")).not.toBeInTheDocument();
+  });
+
   it("shows only the marked time for present students", () => {
     render(<SessionAttendanceScreen token="editor-token-1" />);
 
@@ -113,5 +137,22 @@ describe("SessionAttendanceScreen", () => {
     });
 
     expect(searchInput).toHaveValue("");
+  });
+
+  it("shows the mutation error when attendance cannot be updated", async () => {
+    vi.useFakeTimers();
+    mockToggleAttendance.mockRejectedValue(new Error("Unable to save attendance."));
+
+    render(<SessionAttendanceScreen token="editor-token-1" />);
+
+    const johnRow = screen.getByText("John").closest("button");
+    expect(johnRow).not.toBeNull();
+
+    await act(async () => {
+      fireEvent.click(johnRow!);
+      await vi.advanceTimersByTimeAsync(160);
+    });
+
+    expect(screen.getByText("Unable to save attendance.")).toBeInTheDocument();
   });
 });

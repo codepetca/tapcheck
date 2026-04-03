@@ -57,9 +57,17 @@ Tapcheck is a mobile-first classroom attendance app. It is now the first consume
 ## Testing Harness
 
 - Treat the existing test setup as part of the architecture, not as optional cleanup.
+- Use `docs/system/testing-strategy.md` as the source of truth for the current minimum test surface.
 - Convex behavior should be covered with `convex-test` tests in `convex/*.test.ts`.
 - UI behavior should be covered with focused Vitest component/page tests where practical.
 - Prefer extending existing tests when changing behavior instead of creating parallel test styles for the same surface.
+- Add or update tests when a change affects:
+  - auth or ownership boundaries
+  - dashboard or roster list states
+  - roster import flows
+  - roster detail or session actions
+  - collection screen states and interactions
+  - shared primitives used across screens
 - For auth and ownership work, add or update tests that prove:
   - user bootstrap behavior
   - org membership and roster-access boundaries

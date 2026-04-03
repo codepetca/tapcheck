@@ -286,6 +286,15 @@ npx convex data attendance_records --limit 10 --format pretty
 
 10. Open a second browser profile with a different Clerk account and confirm the first roster is not visible there.
 
+## AI Workflow
+
+- Start with [docs/system/app-dna.md](docs/system/app-dna.md) and [docs/system/product-principles.md](docs/system/product-principles.md) for product and UI guardrails.
+- Use [docs/system/testing-strategy.md](docs/system/testing-strategy.md) to decide what test surface and validation are expected for a change.
+- Use [docs/workflow/feature-brief.md](docs/workflow/feature-brief.md) before non-trivial feature work.
+- Use [docs/workflow/post-implementation-review.md](docs/workflow/post-implementation-review.md) after meaningful feature work.
+- Reuse [docs/system/ui-patterns.md](docs/system/ui-patterns.md), [docs/system/anti-patterns.md](docs/system/anti-patterns.md), and [docs/system/screen-review-rubric.md](docs/system/screen-review-rubric.md) instead of inventing new rules each time.
+- When a workflow repeats, follow [docs/system/skill-creation.md](docs/system/skill-creation.md): suggest a skill, ask for approval, then create it only if it is justified.
+
 ## Notes
 
 - Dashboard access requires Clerk authentication.
