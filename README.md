@@ -247,6 +247,45 @@ pnpm typecheck
 pnpm build
 ```
 
+## Manual smoke test
+
+Use this after resetting the dev deployment or changing auth/bootstrap logic.
+
+1. Start Convex and Next.js:
+
+```bash
+pnpm convex:dev
+pnpm dev
+```
+
+2. Open `http://localhost:3000` in a fresh browser profile or incognito window.
+3. Sign up or sign in through Clerk.
+4. Confirm you land on the dashboard without a bootstrap error.
+5. In another terminal, verify the canonical identity rows exist:
+
+```bash
+npx convex data app_users --limit 5 --format pretty
+npx convex data organizations --limit 5 --format pretty
+npx convex data organization_memberships --limit 5 --format pretty
+```
+
+6. Create a roster and confirm it appears in the dashboard.
+7. Verify the roster created the expected access row:
+
+```bash
+npx convex data rosters --limit 5 --format pretty
+npx convex data roster_access --limit 5 --format pretty
+```
+
+8. Open the roster, start a session, and confirm the editor link loads.
+9. Mark one participant present and verify attendance was written:
+
+```bash
+npx convex data attendance_records --limit 10 --format pretty
+```
+
+10. Open a second browser profile with a different Clerk account and confirm the first roster is not visible there.
+
 ## Notes
 
 - Dashboard access requires Clerk authentication.
