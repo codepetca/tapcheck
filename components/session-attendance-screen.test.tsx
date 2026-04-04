@@ -1,158 +1,140 @@
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionAttendanceScreen } from "./session-attendance-screen";
 
 const mockUseQuery = vi.fn();
 const mockUseMutation = vi.fn();
-const mockToggleAttendance = vi.fn();
+const mockCloseSession = vi.fn();
+const mockMarkManual = vi.fn();
 
 vi.mock("convex/react", () => ({
   useMutation: (...args: unknown[]) => mockUseMutation(...args),
   useQuery: (...args: unknown[]) => mockUseQuery(...args),
 }));
 
-vi.mock("@/lib/time", () => ({
-  getCurrentTimestamp: () => 1_742_000_000_000,
+vi.mock("@/components/clerk-header-controls", () => ({
+  ClerkHeaderControls: () => null,
 }));
 
-const sessionData = {
+vi.mock("react-qr-code", () => ({
+  default: ({ value }: { value: string }) => <div data-testid="qr-value">{value}</div>,
+}));
+
+const liveSession = {
   session: {
     _id: "session-1",
     title: "Homeroom",
-    date: "2026-03-29",
-    isOpen: true,
+    date: "2026-04-04",
+    status: "open" as const,
+    checkInToken: "check-in-token-1",
   },
   roster: {
     _id: "roster-1",
     name: "Homeroom",
   },
-  totalCount: 2,
-  presentCount: 1,
-  students: [
+  counts: {
+    total: 2,
+    present: 1,
+    late: 0,
+    unmarked: 1,
+    absent: 0,
+  },
+  rows: [
     {
-      studentRef: "student-1",
-      studentId: "1001",
-      rawName: "Able, Alice",
+      participantId: "participant-1",
       displayName: "Alice Able",
       firstName: "Alice",
       lastName: "Able",
-      present: true,
-      markedAt: 1_710_000_000_000,
-      modifiedAt: 1_710_000_000_000,
-      lastModifiedAt: 1_710_000_000_000,
+      studentId: "1001",
+      schoolEmail: "alice@example.edu",
+      status: "present" as const,
+      lastMarkedAt: 1_742_000_000_000,
+      modifiedAt: 1_742_000_000_000,
+      linkStatus: "linked" as const,
+      linkedAppUserId: "app-user-1",
     },
     {
-      studentRef: "student-2",
-      studentId: "1002",
-      rawName: "Baker, John",
+      participantId: "participant-2",
       displayName: "John Baker",
       firstName: "John",
       lastName: "Baker",
-      present: false,
-      markedAt: undefined,
-      modifiedAt: 1_710_000_000_000,
-      lastModifiedAt: undefined,
+      studentId: "1002",
+      schoolEmail: undefined,
+      status: "unmarked" as const,
+      lastMarkedAt: undefined,
+      modifiedAt: 1_742_000_000_000,
+      linkStatus: "unlinked" as const,
+      linkedAppUserId: undefined,
+    },
+  ],
+  unresolvedEvents: [
+    {
+      participantId: undefined,
+      participantName: undefined,
+      result: "review_needed" as const,
+      reasonCode: "not_on_roster",
+      createdAt: 1_742_000_000_000,
     },
   ],
 };
 
 describe("SessionAttendanceScreen", () => {
   beforeEach(() => {
+    vi.unstubAllEnvs();
     mockUseQuery.mockReset();
     mockUseMutation.mockReset();
-    mockToggleAttendance.mockReset();
+    mockCloseSession.mockReset();
+    mockMarkManual.mockReset();
 
-    mockUseQuery.mockImplementation((_: unknown, args: unknown) => {
-      if (args && typeof args === "object" && "token" in args) {
-        return sessionData;
-      }
-
-      return undefined;
-    });
-
-    mockToggleAttendance.mockResolvedValue(undefined);
-    mockUseMutation.mockReturnValue({
-      withOptimisticUpdate: () => mockToggleAttendance,
-    });
+    mockUseQuery.mockReturnValue(liveSession);
+    mockCloseSession.mockResolvedValue(undefined);
+    mockMarkManual.mockResolvedValue(undefined);
+    mockUseMutation.mockImplementation(() => mockMarkManual);
   });
 
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  it("shows a loading shell before the token query resolves", () => {
+  it("shows a loading shell before the session query resolves", () => {
     mockUseQuery.mockReturnValue(undefined);
 
-    const { container } = render(<SessionAttendanceScreen token="editor-token-1" />);
+    const { container } = render(
+      <SessionAttendanceScreen rosterId="roster-1" sessionId="session-1" />,
+    );
 
-    expect(screen.queryByRole("heading", { name: "Homeroom" })).not.toBeInTheDocument();
-    expect(screen.queryByPlaceholderText("Search name or student ID")).not.toBeInTheDocument();
     expect(container.querySelector(".animate-pulse")).not.toBeNull();
+    expect(screen.queryByText("Homeroom")).not.toBeInTheDocument();
   });
 
-  it("shows an invalid-link state when the editor token is unavailable", () => {
-    mockUseQuery.mockReturnValue(null);
+  it("renders live attendance rows and review events", () => {
+    render(<SessionAttendanceScreen rosterId="roster-1" sessionId="session-1" />);
 
-    render(<SessionAttendanceScreen token="editor-token-1" />);
-
-    expect(screen.getByText("This attendance link is not available.")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Go to rosters" })).toHaveAttribute("href", "/");
-    expect(screen.queryByPlaceholderText("Search name or student ID")).not.toBeInTheDocument();
-  });
-
-  it("shows only the marked time for present students", () => {
-    render(<SessionAttendanceScreen token="editor-token-1" />);
-
-    const timeLabel = new Intl.DateTimeFormat(undefined, {
-      hour: "numeric",
-      minute: "2-digit",
-    }).format(1_710_000_000_000);
-
-    const aliceRow = screen.getByText("Alice").closest("button");
-    expect(aliceRow).not.toBeNull();
     expect(screen.getByRole("heading", { name: "Homeroom" })).toBeInTheDocument();
-    expect(screen.getByPlaceholderText("Search name or student ID")).toBeInTheDocument();
-    expect(within(aliceRow!).getByText(timeLabel)).toBeInTheDocument();
-    expect(within(aliceRow!).queryByText(/^Present/)).not.toBeInTheDocument();
-    expect(screen.getByLabelText("1 of 2 students marked present")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Search name, ID, or email")).toBeInTheDocument();
+    expect(screen.getByText("Alice Able")).toBeInTheDocument();
+    expect(screen.getByText("John Baker")).toBeInTheDocument();
+    expect(screen.getByText(/Unmatched student/i)).toBeInTheDocument();
+    expect(screen.getByText(/not on roster/i)).toBeInTheDocument();
   });
 
-  it("submits attendance toggles with the expected token and timestamp", async () => {
-    render(<SessionAttendanceScreen token="editor-token-1" />);
+  it("uses the configured public app url for the QR target", () => {
+    vi.stubEnv("NEXT_PUBLIC_APP_URL", "https://tap.codepet.ca");
 
-    const searchInput = screen.getByPlaceholderText("Search name or student ID");
-    fireEvent.change(searchInput, { target: { value: "John" } });
+    render(<SessionAttendanceScreen rosterId="roster-1" sessionId="session-1" />);
 
-    const johnRow = screen.getByText("John").closest("button");
-    expect(johnRow).not.toBeNull();
+    expect(screen.getByTestId("qr-value")).toHaveTextContent(
+      "https://tap.codepet.ca/check-in/check-in-token-1",
+    );
+  });
 
-    fireEvent.click(johnRow!);
+  it("submits manual present updates with the expected participant and session ids", async () => {
+    render(<SessionAttendanceScreen rosterId="roster-1" sessionId="session-1" />);
+
+    fireEvent.click(screen.getAllByRole("button", { name: /Present/i })[1]!);
 
     await waitFor(() => {
-      expect(mockToggleAttendance).toHaveBeenCalledWith({
-        token: "editor-token-1",
-        studentRef: "student-2",
-        clientNow: 1_742_000_000_000,
+      expect(mockMarkManual).toHaveBeenCalledWith({
+        sessionId: "session-1",
+        participantId: "participant-2",
+        nextStatus: "present",
       });
     });
-
-    expect(searchInput).toHaveValue("");
-  });
-
-  it("shows the mutation error when attendance cannot be updated", async () => {
-    vi.useFakeTimers();
-    mockToggleAttendance.mockRejectedValue(new Error("Unable to save attendance."));
-
-    render(<SessionAttendanceScreen token="editor-token-1" />);
-
-    const johnRow = screen.getByText("John").closest("button");
-    expect(johnRow).not.toBeNull();
-
-    await act(async () => {
-      fireEvent.click(johnRow!);
-      await vi.advanceTimersByTimeAsync(160);
-    });
-
-    expect(screen.getByText("Unable to save attendance.")).toBeInTheDocument();
   });
 });

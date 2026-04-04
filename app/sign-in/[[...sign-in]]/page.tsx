@@ -9,7 +9,7 @@ export default function SignInPage() {
         path={SIGN_IN_URL}
         routing="path"
         signUpUrl={SIGN_UP_URL}
-        forceRedirectUrl="/"
+        fallbackRedirectUrl="/"
         appearance={{
           theme: "simple",
           layout: {
