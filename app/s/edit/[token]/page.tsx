@@ -1,4 +1,5 @@
-import { SessionAttendanceScreen } from "@/components/session-attendance-screen";
+import { redirect } from "next/navigation";
+import { buildCheckInPath } from "@/lib/session-links";
 
 export default async function EditorAttendancePage({
   params,
@@ -6,5 +7,5 @@ export default async function EditorAttendancePage({
   params: Promise<{ token: string }>;
 }) {
   const { token } = await params;
-  return <SessionAttendanceScreen token={token} />;
+  redirect(buildCheckInPath(token));
 }

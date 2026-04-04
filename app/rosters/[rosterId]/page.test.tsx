@@ -5,16 +5,15 @@ import RosterDetailPage from "./page";
 const mockUseQuery = vi.fn();
 const mockUseMutation = vi.fn();
 const mockPush = vi.fn();
-const mockUseCurrentAppUser = vi.fn();
 const mockRenameRoster = vi.fn();
 const mockDeleteRoster = vi.fn();
-const mockCreateSession = vi.fn();
-const mockStopSession = vi.fn();
-const mockResumeSession = vi.fn();
+const mockAutoLinkParticipants = vi.fn();
+const mockLinkParticipantToAppUser = vi.fn();
+const mockUnlinkParticipant = vi.fn();
+const mockStartSession = vi.fn();
 
 vi.mock("react", async () => {
   const actual = await vi.importActual<typeof import("react")>("react");
-
   return {
     ...actual,
     use: (value: unknown) => value,
@@ -30,16 +29,8 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: mockPush }),
 }));
 
-vi.mock("@/components/use-current-app-user", () => ({
-  useCurrentAppUser: () => mockUseCurrentAppUser(),
-}));
-
 vi.mock("@/components/clerk-header-controls", () => ({
   ClerkHeaderControls: () => null,
-}));
-
-vi.mock("@/components/confirm-dialog", () => ({
-  ConfirmDialog: () => null,
 }));
 
 const rosterDetail = {
@@ -50,35 +41,57 @@ const rosterDetail = {
   },
   students: [
     {
-      _id: "student-1",
-      studentId: "1002",
-      rawName: "Baker, Alice",
-      firstName: "Alice",
-      lastName: "Baker",
-      displayName: "Alice Baker",
-      active: true,
-    },
-    {
-      _id: "student-2",
+      _id: "participant-1",
       studentId: "1001",
-      rawName: "Able, John",
-      firstName: "John",
+      schoolEmail: "alice@example.edu",
+      rawName: "Able, Alice",
+      firstName: "Alice",
       lastName: "Able",
-      displayName: "John Able",
+      displayName: "Alice Able",
       active: true,
+      linkStatus: "linked" as const,
+      linkedAppUserId: "app-user-1",
     },
   ],
   sessions: [
     {
       _id: "session-1",
       title: "Homeroom",
-      date: "2026-03-29",
-      isOpen: true,
-      editorToken: "editor-token-1",
+      date: "2026-04-04",
+      status: "open" as const,
+      checkInToken: "check-in-token-1",
       createdAt: 1_710_000_000_000,
     },
   ],
 };
+
+const linkSummary = {
+  totalActiveParticipants: 1,
+  linkedCount: 1,
+  unlinkedCount: 0,
+  ambiguousCount: 0,
+  reviewNeededCount: 0,
+};
+
+const linkIssues = [
+  {
+    participantId: "participant-1",
+    displayName: "Alice Able",
+    studentId: "1001",
+    schoolEmail: "alice@example.edu",
+    linkStatus: "review_needed" as const,
+    linkedAppUserId: "app-user-1",
+    candidates: [
+      {
+        appUserId: "app-user-1",
+        displayName: "Alice Able",
+        studentId: "1001",
+        schoolEmail: "alice@example.edu",
+      },
+    ],
+    suggestedReasonCode: "linked_to_other_user",
+  },
+];
 
 const sessionExport = {
   roster: {
@@ -88,29 +101,21 @@ const sessionExport = {
   session: {
     _id: "session-1",
     title: "Homeroom",
-    date: "2026-03-29",
-    isOpen: true,
+    date: "2026-04-04",
+    status: "open" as const,
   },
   rows: [
     {
-      studentId: "1002",
-      rawName: "Baker, Alice",
-      displayName: "Alice Baker",
-      firstName: "Alice",
-      lastName: "Baker",
-      present: true,
-      markedAt: 1_710_000_000_000,
-      modifiedAt: 1_710_000_000_000,
-    },
-    {
       studentId: "1001",
-      rawName: "Able, John",
-      displayName: "John Able",
-      firstName: "John",
+      schoolEmail: "alice@example.edu",
+      rawName: "Able, Alice",
+      displayName: "Alice Able",
+      firstName: "Alice",
       lastName: "Able",
-      present: false,
-      markedAt: undefined,
-      modifiedAt: 1_710_000_000_000,
+      status: "present" as const,
+      present: true,
+      markedAt: 1_742_000_000_000,
+      modifiedAt: 1_742_000_000_000,
     },
   ],
 };
@@ -119,185 +124,98 @@ function renderPage() {
   return render(<RosterDetailPage params={{ rosterId: "roster-1" } as never} />);
 }
 
-describe("RosterDetailPage actions", () => {
+describe("RosterDetailPage", () => {
   beforeEach(() => {
     mockUseQuery.mockReset();
     mockUseMutation.mockReset();
     mockPush.mockReset();
-    mockUseCurrentAppUser.mockReset();
     mockRenameRoster.mockReset();
     mockDeleteRoster.mockReset();
-    mockCreateSession.mockReset();
-    mockStopSession.mockReset();
-    mockResumeSession.mockReset();
-
-    mockUseCurrentAppUser.mockReturnValue({
-      currentAppUser: {
-        _id: "app-user-1",
-        displayName: "Teacher One",
-        createdAt: 1_710_000_000_000,
-      },
-      bootstrapError: null,
-      isReady: true,
-    });
+    mockAutoLinkParticipants.mockReset();
+    mockLinkParticipantToAppUser.mockReset();
+    mockUnlinkParticipant.mockReset();
+    mockStartSession.mockReset();
 
     mockUseQuery.mockImplementation((_: unknown, args: unknown) => {
       if (args && typeof args === "object" && "rosterId" in args) {
-        return rosterDetail;
+        if ((args as { rosterId: string }).rosterId === "roster-1") {
+          return rosterDetail;
+        }
       }
 
       if (args && typeof args === "object" && "sessionId" in args) {
         return sessionExport;
       }
 
-      return undefined;
+      return linkSummary;
     });
+
+    mockUseQuery
+      .mockReturnValueOnce(rosterDetail)
+      .mockReturnValueOnce(linkSummary)
+      .mockReturnValueOnce(linkIssues)
+      .mockReturnValueOnce(sessionExport);
 
     mockRenameRoster.mockResolvedValue(undefined);
     mockDeleteRoster.mockResolvedValue(undefined);
-    mockCreateSession.mockResolvedValue(undefined);
-    mockStopSession.mockResolvedValue(undefined);
-    mockResumeSession.mockResolvedValue(undefined);
+    mockAutoLinkParticipants.mockResolvedValue(undefined);
+    mockLinkParticipantToAppUser.mockResolvedValue(undefined);
+    mockUnlinkParticipant.mockResolvedValue(undefined);
+    mockStartSession.mockResolvedValue("session-new");
+
     mockUseMutation
       .mockReturnValueOnce(mockRenameRoster)
       .mockReturnValueOnce(mockDeleteRoster)
-      .mockReturnValueOnce(mockCreateSession)
-      .mockReturnValueOnce(mockStopSession)
-      .mockReturnValueOnce(mockResumeSession);
-
-    Object.defineProperty(window.navigator, "userAgentData", {
-      configurable: true,
-      value: { mobile: false },
-    });
-    Object.defineProperty(window.navigator, "clipboard", {
-      configurable: true,
-      value: {
-        writeText: vi.fn().mockResolvedValue(undefined),
-      },
-    });
-    Object.defineProperty(window.navigator, "share", {
-      configurable: true,
-      value: vi.fn().mockResolvedValue(undefined),
-    });
-    Object.defineProperty(window.navigator, "canShare", {
-      configurable: true,
-      value: vi.fn().mockReturnValue(true),
-    });
-
-    vi.spyOn(window, "open").mockReturnValue({} as Window);
-    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
-    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:attendance");
-    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
-    vi.spyOn(window, "prompt").mockImplementation(() => null);
+      .mockReturnValueOnce(mockAutoLinkParticipants)
+      .mockReturnValueOnce(mockLinkParticipantToAppUser)
+      .mockReturnValueOnce(mockUnlinkParticipant)
+      .mockReturnValueOnce(mockStartSession);
   });
 
-  it("uses desktop copy and download fallbacks while keeping the same visible actions", async () => {
+  it("opens the live session when an active session exists", () => {
     renderPage();
 
-    fireEvent.click(screen.getByRole("button", { name: "Open collection link" }));
-    expect(window.open).toHaveBeenCalledWith(
-      "http://localhost:3000/s/edit/editor-token-1",
-      "_blank",
-      "noopener,noreferrer",
+    expect(screen.getByRole("link", { name: /Open session/i })).toHaveAttribute(
+      "href",
+      "/rosters/roster-1/sessions/session-1",
     );
-
-    fireEvent.click(screen.getByRole("button", { name: "Share or copy collection link" }));
-
-    await waitFor(() => {
-      expect(window.navigator.clipboard.writeText).toHaveBeenCalledWith(
-        "http://localhost:3000/s/edit/editor-token-1",
-      );
-    });
-    expect(window.navigator.share).not.toHaveBeenCalled();
-
-    fireEvent.click(screen.getByRole("button", { name: "Send or download attendance results" }));
-
-    await waitFor(() => {
-      expect(HTMLAnchorElement.prototype.click).toHaveBeenCalled();
-    });
-    expect(window.navigator.share).not.toHaveBeenCalled();
   });
 
-  it("uses mobile share flows for the same visible actions", async () => {
-    Object.defineProperty(window.navigator, "userAgentData", {
-      configurable: true,
-      value: { mobile: true },
-    });
-
+  it("runs auto-link from the roster detail page", async () => {
     renderPage();
 
-    fireEvent.click(screen.getByRole("button", { name: "Share or copy collection link" }));
+    fireEvent.click(screen.getByRole("button", { name: /Auto-link/i }));
 
     await waitFor(() => {
-      expect(window.navigator.share).toHaveBeenCalledWith({
-        title: "Homeroom attendance link",
-        url: "http://localhost:3000/s/edit/editor-token-1",
+      expect(mockAutoLinkParticipants).toHaveBeenCalledWith({ rosterId: "roster-1" });
+    });
+  });
+
+  it("links a participant to a suggested candidate", async () => {
+    renderPage();
+
+    fireEvent.click(screen.getByRole("button", { name: /Link Alice Able/i }));
+
+    await waitFor(() => {
+      expect(mockLinkParticipantToAppUser).toHaveBeenCalledWith({
+        participantId: "participant-1",
+        appUserId: "app-user-1",
       });
     });
-
-    fireEvent.click(screen.getByRole("button", { name: "Send or download attendance results" }));
-
-    await waitFor(() => {
-      expect(window.navigator.share).toHaveBeenCalledTimes(2);
-    });
-
-    const secondCall = vi.mocked(window.navigator.share).mock.calls[1]?.[0] as {
-      files?: File[];
-      title?: string;
-    };
-
-    expect(secondCall.title).toBe("homeroom-2026-03-29-attendance.csv");
-    expect(secondCall.files?.[0]?.name).toBe("homeroom-2026-03-29-attendance.csv");
   });
 
-  it("stops the active session immediately without a confirmation dialog", async () => {
+  it("renders the missing roster state without running link queries", () => {
+    mockUseQuery.mockReset();
+    mockUseQuery
+      .mockReturnValueOnce(null)
+      .mockReturnValueOnce(undefined)
+      .mockReturnValueOnce(undefined)
+      .mockReturnValueOnce(undefined);
+
     renderPage();
 
-    fireEvent.click(screen.getByRole("button", { name: "Stop" }));
-
-    await waitFor(() => {
-      expect(mockStopSession).toHaveBeenCalledWith({ sessionId: "session-1" });
-    });
-  });
-
-  it("sorts ascending by the selected column and uses the compact ID header", () => {
-    renderPage();
-
-    expect(screen.getByLabelText("1 of 2 students marked present")).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "First" }));
-
-    let rows = screen.getAllByRole("row");
-    expect(rows[1]).toHaveTextContent("Alice");
-    expect(rows[2]).toHaveTextContent("John");
-
-    fireEvent.click(screen.getByRole("button", { name: "ID" }));
-
-    rows = screen.getAllByRole("row");
-    expect(rows[1]).toHaveTextContent("1001");
-    expect(rows[2]).toHaveTextContent("1002");
-    expect(screen.queryByText("Student ID")).not.toBeInTheDocument();
-    expect(screen.queryByText("↑")).not.toBeInTheDocument();
-    expect(screen.queryByText("↓")).not.toBeInTheDocument();
-  });
-
-  it("sorts status descending first, then toggles to ascending on a second tap", () => {
-    renderPage();
-
-    fireEvent.click(screen.getByRole("button", { name: "Status" }));
-
-    let rows = screen.getAllByRole("row");
-    expect(rows[1]).toHaveTextContent("Alice");
-    expect(rows[1]).toHaveTextContent("Present");
-    expect(rows[2]).toHaveTextContent("John");
-    expect(rows[2]).toHaveTextContent("Absent");
-
-    fireEvent.click(screen.getByRole("button", { name: "Status" }));
-
-    rows = screen.getAllByRole("row");
-    expect(rows[1]).toHaveTextContent("John");
-    expect(rows[1]).toHaveTextContent("Absent");
-    expect(rows[2]).toHaveTextContent("Alice");
-    expect(rows[2]).toHaveTextContent("Present");
+    expect(screen.getByText("This roster does not exist.")).toBeInTheDocument();
+    expect(mockUseQuery).toHaveBeenNthCalledWith(2, expect.anything(), "skip");
+    expect(mockUseQuery).toHaveBeenNthCalledWith(3, expect.anything(), "skip");
   });
 });

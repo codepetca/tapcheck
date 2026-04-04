@@ -7,11 +7,14 @@ import {
   requireAccessibleRoster,
   requireCurrentOrganizationMembership,
 } from "./auth";
+import { getParticipantType, normalizeSchoolEmail, normalizeStudentId } from "./domain";
+import { autoLinkParticipant, syncParticipantAttendanceRecords } from "./participantLinks";
 import type { Id } from "./model";
 import { mutation, query, type MutationCtx, type QueryCtx } from "./server";
 
 const importedStudentValidator = v.object({
-  studentId: v.string(),
+  studentId: v.optional(v.string()),
+  schoolEmail: v.optional(v.string()),
   rawName: v.string(),
   firstName: v.string(),
   lastName: v.string(),
@@ -34,102 +37,122 @@ async function loadRosterParticipants(ctx: QueryCtx | MutationCtx, rosterId: Id<
     .collect();
 }
 
-async function syncParticipantIntoOpenSessions(
-  ctx: MutationCtx,
-  rosterId: Id<"rosters">,
-  participant: {
-    _id: Id<"participants">;
-    linkedAppUserId?: Id<"app_users">;
-    externalId?: string;
-  },
-) {
-  const rosterSessions = await ctx.db
-    .query("sessions")
-    .withIndex("by_rosterId_createdAt", (q) => q.eq("rosterId", rosterId))
-    .collect();
-
-  const openSessions = rosterSessions.filter((session) => session.isOpen);
-  if (openSessions.length === 0) {
-    return;
-  }
-
-  const now = Date.now();
-
-  for (const session of openSessions) {
-    const existingAttendance = await ctx.db
-      .query("attendance_records")
-      .withIndex("by_sessionId_participantId", (q) =>
-        q.eq("sessionId", session._id).eq("participantId", participant._id),
-      )
-      .unique();
-
-    if (existingAttendance) {
-      continue;
-    }
-
-    await ctx.db.insert("attendance_records", {
-      sessionId: session._id,
-      participantId: participant._id,
-      linkedAppUserId: participant.linkedAppUserId,
-      status: "absent",
-      source: "override",
-      modifiedAt: now,
-    });
-  }
-}
-
-function mapParticipantsByExternalId(
+function mapParticipantsByIdentifiers(
   participants: Array<{
     _id: Id<"participants">;
     externalId?: string;
+    schoolEmail?: string;
     linkedAppUserId?: Id<"app_users">;
   }>,
 ) {
-  const duplicateExternalIds = new Set<string>();
-  const participantsByExternalId = new Map<string, (typeof participants)[number]>();
+  const duplicateStudentIds = new Set<string>();
+  const duplicateSchoolEmails = new Set<string>();
+  const participantsByStudentId = new Map<string, (typeof participants)[number]>();
+  const participantsBySchoolEmail = new Map<string, (typeof participants)[number]>();
 
   for (const participant of participants) {
     if (!participant.externalId) {
       continue;
     }
 
-    if (participantsByExternalId.has(participant.externalId)) {
-      duplicateExternalIds.add(participant.externalId);
+    if (participantsByStudentId.has(participant.externalId)) {
+      duplicateStudentIds.add(participant.externalId);
+    } else {
+      participantsByStudentId.set(participant.externalId, participant);
+    }
+  }
+
+  for (const participant of participants) {
+    if (!participant.schoolEmail) {
       continue;
     }
 
-    participantsByExternalId.set(participant.externalId, participant);
+    if (participantsBySchoolEmail.has(participant.schoolEmail)) {
+      duplicateSchoolEmails.add(participant.schoolEmail);
+      continue;
+    }
+
+    participantsBySchoolEmail.set(participant.schoolEmail, participant);
   }
 
-  if (duplicateExternalIds.size > 0) {
-    const ids = [...duplicateExternalIds].sort().join(", ");
+  if (duplicateStudentIds.size > 0) {
+    const ids = [...duplicateStudentIds].sort().join(", ");
     throw new Error(`Roster already contains duplicate student IDs: ${ids}.`);
   }
 
-  return participantsByExternalId;
+  if (duplicateSchoolEmails.size > 0) {
+    const emails = [...duplicateSchoolEmails].sort().join(", ");
+    throw new Error(`Roster already contains duplicate school emails: ${emails}.`);
+  }
+
+  return {
+    participantsByStudentId,
+    participantsBySchoolEmail,
+  };
 }
 
-function validateImportedStudents(
-  students: Array<{
-    studentId: string;
-  }>,
-) {
+function validateImportedStudents(students: Array<{ studentId?: string; schoolEmail?: string }>) {
   if (students.length === 0) {
     throw new Error("At least one valid student is required.");
   }
 
   const duplicateIds = new Set<string>();
+  const duplicateEmails = new Set<string>();
   const seenIds = new Set<string>();
+  const seenEmails = new Set<string>();
+
   for (const student of students) {
-    if (seenIds.has(student.studentId)) {
-      duplicateIds.add(student.studentId);
+    const normalizedStudentId = normalizeStudentId(student.studentId);
+    const normalizedSchoolEmail = normalizeSchoolEmail(student.schoolEmail);
+
+    if (!normalizedStudentId && !normalizedSchoolEmail) {
+      throw new Error("Each imported student must have a student ID or school email.");
     }
-    seenIds.add(student.studentId);
+
+    if (normalizedStudentId) {
+      if (seenIds.has(normalizedStudentId)) {
+        duplicateIds.add(normalizedStudentId);
+      }
+
+      seenIds.add(normalizedStudentId);
+    }
+
+    if (normalizedSchoolEmail) {
+      if (seenEmails.has(normalizedSchoolEmail)) {
+        duplicateEmails.add(normalizedSchoolEmail);
+      }
+
+      seenEmails.add(normalizedSchoolEmail);
+    }
   }
 
   if (duplicateIds.size > 0) {
     throw new Error("Duplicate student IDs were found in the import.");
   }
+
+  if (duplicateEmails.size > 0) {
+    throw new Error("Duplicate school emails were found in the import.");
+  }
+}
+
+function findExistingParticipantForImport(
+  identifierMaps: ReturnType<typeof mapParticipantsByIdentifiers>,
+  student: { studentId?: string; schoolEmail?: string },
+) {
+  const normalizedStudentId = normalizeStudentId(student.studentId);
+  const normalizedSchoolEmail = normalizeSchoolEmail(student.schoolEmail);
+  const matchByStudentId = normalizedStudentId
+    ? identifierMaps.participantsByStudentId.get(normalizedStudentId)
+    : undefined;
+  const matchBySchoolEmail = normalizedSchoolEmail
+    ? identifierMaps.participantsBySchoolEmail.get(normalizedSchoolEmail)
+    : undefined;
+
+  if (matchByStudentId && matchBySchoolEmail && matchByStudentId._id !== matchBySchoolEmail._id) {
+    throw new Error("Roster import identifiers conflict with existing participants.");
+  }
+
+  return matchByStudentId ?? matchBySchoolEmail ?? null;
 }
 
 async function findAccessibleRosterMembership(
@@ -181,6 +204,37 @@ async function listAccessibleRosters(ctx: QueryCtx, appUserId: Id<"app_users">) 
     .sort((left, right) => right.createdAt - left.createdAt);
 }
 
+async function createParticipant(
+  ctx: MutationCtx,
+  args: {
+    rosterId: Id<"rosters">;
+    studentId?: string;
+    schoolEmail?: string;
+    rawName: string;
+    firstName: string;
+    lastName: string;
+    displayName: string;
+    sortKey: string;
+    now: number;
+  },
+) {
+  return ctx.db.insert("participants", {
+    rosterId: args.rosterId,
+    externalId: normalizeStudentId(args.studentId),
+    schoolEmail: normalizeSchoolEmail(args.schoolEmail),
+    rawName: args.rawName,
+    firstName: args.firstName,
+    lastName: args.lastName,
+    displayName: args.displayName,
+    sortKey: args.sortKey,
+    participantType: "roster_only",
+    linkStatus: "unlinked",
+    active: true,
+    createdAt: args.now,
+    updatedAt: args.now,
+  });
+}
+
 export const list = query({
   args: {},
   returns: v.array(
@@ -225,7 +279,7 @@ export const list = query({
           createdAt: roster.createdAt,
           studentCount: participants.length,
           sessionCount: sessions.length,
-          hasActiveSession: sessions.some((session) => session.isOpen),
+          hasActiveSession: sessions.some((session) => session.status === "open"),
           latestSessionId: latestSession?._id,
         };
       }),
@@ -247,11 +301,19 @@ export const getById = query({
         v.object({
           _id: v.id("participants"),
           studentId: v.string(),
+          schoolEmail: v.optional(v.string()),
           rawName: v.string(),
           firstName: v.string(),
           lastName: v.string(),
           displayName: v.string(),
           active: v.boolean(),
+          linkStatus: v.union(
+            v.literal("linked"),
+            v.literal("unlinked"),
+            v.literal("ambiguous"),
+            v.literal("review_needed"),
+          ),
+          linkedAppUserId: v.optional(v.id("app_users")),
         }),
       ),
       sessions: v.array(
@@ -259,8 +321,8 @@ export const getById = query({
           _id: v.id("sessions"),
           title: v.string(),
           date: v.string(),
-          isOpen: v.boolean(),
-          editorToken: v.string(),
+          status: v.union(v.literal("open"), v.literal("closed")),
+          checkInToken: v.string(),
           createdAt: v.number(),
         }),
       ),
@@ -303,11 +365,14 @@ export const getById = query({
       students: participants.map((participant) => ({
         _id: participant._id,
         studentId: participant.externalId ?? "",
+        schoolEmail: participant.schoolEmail,
         rawName: participant.rawName,
         firstName: participant.firstName,
         lastName: participant.lastName,
         displayName: participant.displayName,
         active: participant.active,
+        linkStatus: participant.linkStatus,
+        linkedAppUserId: participant.linkedAppUserId,
       })),
       sessions: sessions
         .sort((left, right) => right.createdAt - left.createdAt)
@@ -315,8 +380,8 @@ export const getById = query({
           _id: session._id,
           title: session.title,
           date: session.date,
-          isOpen: session.isOpen,
-          editorToken: session.editorToken,
+          status: session.status,
+          checkInToken: session.checkInToken,
           createdAt: session.createdAt,
         })),
     };
@@ -389,19 +454,23 @@ export const importCsv = mutation({
     });
 
     for (const student of args.students) {
-      await ctx.db.insert("participants", {
+      const participantId = await createParticipant(ctx, {
         rosterId,
-        externalId: student.studentId,
+        studentId: student.studentId,
+        schoolEmail: student.schoolEmail,
         rawName: student.rawName,
         firstName: student.firstName,
         lastName: student.lastName,
         displayName: student.displayName,
         sortKey: student.sortKey,
-        participantType: "roster_only",
-        active: true,
-        createdAt: now,
-        updatedAt: now,
+        now,
       });
+
+      const participant = await ctx.db.get(participantId);
+      const roster = await ctx.db.get(rosterId);
+      if (participant && roster) {
+        await autoLinkParticipant(ctx, roster, participant, currentUser._id);
+      }
     }
 
     return rosterId;
@@ -436,7 +505,7 @@ export const importIntoExisting = mutation({
   },
   returns: v.id("rosters"),
   handler: async (ctx, args) => {
-    await requireAccessibleRoster(ctx, args.rosterId);
+    const { roster, appUser } = await requireAccessibleRoster(ctx, args.rosterId);
 
     const name = args.name.trim();
     if (!name) {
@@ -446,66 +515,71 @@ export const importIntoExisting = mutation({
     validateImportedStudents(args.students);
 
     const existingParticipants = await loadRosterParticipants(ctx, args.rosterId);
-    const existingByExternalId = mapParticipantsByExternalId(existingParticipants);
+    const identifierMaps = mapParticipantsByIdentifiers(existingParticipants);
     const now = Date.now();
+    const matchedParticipantIds = new Set<Id<"participants">>();
 
     await ctx.db.patch(args.rosterId, { name, updatedAt: now });
 
-    if (args.deactivateMissing) {
-      const incomingIds = new Set(args.students.map((student) => student.studentId));
-      for (const existingParticipant of existingParticipants) {
-        if (
-          existingParticipant.externalId &&
-          !incomingIds.has(existingParticipant.externalId) &&
-          existingParticipant.active
-        ) {
-          await ctx.db.patch(existingParticipant._id, {
-            active: false,
-            updatedAt: now,
-          });
-        }
-      }
-    }
-
     for (const student of args.students) {
-      const existingParticipant = existingByExternalId.get(student.studentId);
+      const studentId = normalizeStudentId(student.studentId);
+      const schoolEmail = normalizeSchoolEmail(student.schoolEmail);
+      const existingParticipant = findExistingParticipantForImport(identifierMaps, {
+        studentId,
+        schoolEmail,
+      });
       if (existingParticipant) {
+        matchedParticipantIds.add(existingParticipant._id);
         await ctx.db.patch(existingParticipant._id, {
-          externalId: student.studentId,
+          externalId: studentId,
+          schoolEmail,
           rawName: student.rawName,
           firstName: student.firstName,
           lastName: student.lastName,
           displayName: student.displayName,
           sortKey: student.sortKey,
-          participantType: existingParticipant.linkedAppUserId ? "identified_user" : "roster_only",
+          participantType: getParticipantType(existingParticipant.linkedAppUserId),
           active: true,
           updatedAt: now,
         });
-        await syncParticipantIntoOpenSessions(ctx, args.rosterId, {
-          _id: existingParticipant._id,
-          linkedAppUserId: existingParticipant.linkedAppUserId,
-          externalId: student.studentId,
-        });
-        continue;
+        const refreshedParticipant = await ctx.db.get(existingParticipant._id);
+        if (refreshedParticipant) {
+          await autoLinkParticipant(ctx, roster, refreshedParticipant, appUser._id);
+          await syncParticipantAttendanceRecords(ctx, refreshedParticipant);
+        }
+          continue;
       }
 
-      const participantId = await ctx.db.insert("participants", {
+      const participantId = await createParticipant(ctx, {
         rosterId: args.rosterId,
-        externalId: student.studentId,
+        studentId,
+        schoolEmail,
         rawName: student.rawName,
         firstName: student.firstName,
         lastName: student.lastName,
         displayName: student.displayName,
         sortKey: student.sortKey,
-        participantType: "roster_only",
-        active: true,
-        createdAt: now,
-        updatedAt: now,
+        now,
       });
-      await syncParticipantIntoOpenSessions(ctx, args.rosterId, {
-        _id: participantId,
-        externalId: student.studentId,
-      });
+
+      const participant = await ctx.db.get(participantId);
+      if (participant) {
+        matchedParticipantIds.add(participant._id);
+        await autoLinkParticipant(ctx, roster, participant, appUser._id);
+      }
+    }
+
+    if (args.deactivateMissing) {
+      for (const existingParticipant of existingParticipants) {
+        if (matchedParticipantIds.has(existingParticipant._id) || !existingParticipant.active) {
+          continue;
+        }
+
+        await ctx.db.patch(existingParticipant._id, {
+          active: false,
+          updatedAt: now,
+        });
+      }
     }
 
     return args.rosterId;
@@ -535,20 +609,27 @@ export const seedDemo = mutation({
       updatedAt: now,
     });
 
+    const roster = await ctx.db.get(rosterId);
+    if (!roster) {
+      throw new Error("Demo roster could not be created.");
+    }
+
     for (const student of buildDemoRosterStudents()) {
-      await ctx.db.insert("participants", {
+      const participantId = await createParticipant(ctx, {
         rosterId,
-        externalId: student.studentId,
+        studentId: student.studentId,
         rawName: student.rawName,
         firstName: student.firstName,
         lastName: student.lastName,
         displayName: student.displayName,
         sortKey: student.sortKey,
-        participantType: "roster_only",
-        active: true,
-        createdAt: now,
-        updatedAt: now,
+        now,
       });
+
+      const participant = await ctx.db.get(participantId);
+      if (participant) {
+        await autoLinkParticipant(ctx, roster, participant, currentUser._id);
+      }
     }
 
     return rosterId;
@@ -576,13 +657,23 @@ export const remove = mutation({
     ]);
 
     for (const session of sessions) {
-      const attendanceRows = await ctx.db
-        .query("attendance_records")
-        .withIndex("by_sessionId", (q) => q.eq("sessionId", session._id))
-        .collect();
+      const [attendanceRows, attendanceEvents] = await Promise.all([
+        ctx.db
+          .query("attendance_records")
+          .withIndex("by_sessionId", (q) => q.eq("sessionId", session._id))
+          .collect(),
+        ctx.db
+          .query("attendance_events")
+          .withIndex("by_sessionId_and_createdAt", (q) => q.eq("sessionId", session._id))
+          .collect(),
+      ]);
 
       for (const attendance of attendanceRows) {
         await ctx.db.delete(attendance._id);
+      }
+
+      for (const attendanceEvent of attendanceEvents) {
+        await ctx.db.delete(attendanceEvent._id);
       }
 
       await ctx.db.delete(session._id);
