@@ -13,7 +13,12 @@ import { useCurrentAppUser } from "@/components/use-current-app-user";
 import { api } from "@/convex/api";
 import type { Id } from "@/convex/model";
 import { generateRosterName } from "@/lib/roster-names";
-import { buildImportPreview, guessColumnMapping, type ColumnMapping } from "@/lib/students";
+import {
+  buildImportPreview,
+  buildStudentIdentityKey,
+  guessColumnMapping,
+  type ColumnMapping,
+} from "@/lib/students";
 
 type CsvRow = Record<string, string>;
 type ImportSource = "file" | "paste" | null;
@@ -22,6 +27,7 @@ type HelpModal = "file" | "paste" | null;
 
 const PASTED_NAME_COLUMN = "Student Name";
 const PASTED_ID_COLUMN = "Student ID";
+const PASTED_EMAIL_COLUMN = "School Email";
 
 function splitPastedLine(line: string) {
   const trimmed = line.trim();
@@ -30,9 +36,23 @@ function splitPastedLine(line: string) {
   }
 
   if (trimmed.includes("\t")) {
-    const [studentId, ...nameParts] = trimmed.split("\t");
+    const parts = trimmed.split("\t").map((part) => part.trim());
+    if (parts.length >= 3) {
+      const [first, second, ...nameParts] = parts;
+      const identifiers = [first, second].filter(Boolean);
+      const schoolEmail = identifiers.find((value) => value.includes("@")) ?? "";
+      const studentId = identifiers.find((value) => value !== schoolEmail) ?? "";
+      return {
+        studentId,
+        schoolEmail,
+        studentName: nameParts.join(" ").trim(),
+      };
+    }
+
+    const [identifier, ...nameParts] = parts;
     return {
-      studentId: studentId?.trim() ?? "",
+      studentId: identifier?.includes("@") ? "" : identifier ?? "",
+      schoolEmail: identifier?.includes("@") ? identifier ?? "" : "",
       studentName: nameParts.join(" ").trim(),
     };
   }
@@ -40,7 +60,8 @@ function splitPastedLine(line: string) {
   const commaParts = trimmed.split(",");
   if (commaParts.length >= 2) {
     return {
-      studentId: commaParts[0]?.trim() ?? "",
+      studentId: commaParts[0]?.includes("@") ? "" : commaParts[0]?.trim() ?? "",
+      schoolEmail: commaParts[0]?.includes("@") ? commaParts[0]?.trim() ?? "" : "",
       studentName: commaParts.slice(1).join(",").trim(),
     };
   }
@@ -48,13 +69,15 @@ function splitPastedLine(line: string) {
   const match = trimmed.match(/^(\S+)\s+(.+)$/);
   if (match) {
     return {
-      studentId: match[1]?.trim() ?? "",
+      studentId: match[1]?.includes("@") ? "" : match[1]?.trim() ?? "",
+      schoolEmail: match[1]?.includes("@") ? match[1]?.trim() ?? "" : "",
       studentName: match[2]?.trim() ?? "",
     };
   }
 
   return {
-    studentId: trimmed,
+    studentId: trimmed.includes("@") ? "" : trimmed,
+    schoolEmail: trimmed.includes("@") ? trimmed : "",
     studentName: "",
   };
 }
@@ -63,8 +86,8 @@ function parsePastedStudentList(input: string): CsvRow[] {
   const rows = input
     .split(/\r?\n/)
     .map((line) => splitPastedLine(line))
-    .filter((row): row is { studentId: string; studentName: string } => row !== null)
-    .map((row) => [row.studentId, row.studentName]);
+    .filter((row): row is { studentId: string; schoolEmail: string; studentName: string } => row !== null)
+    .map((row) => [row.studentId, row.schoolEmail, row.studentName]);
 
   if (rows.length === 0) {
     return [];
@@ -72,32 +95,39 @@ function parsePastedStudentList(input: string): CsvRow[] {
 
   const [firstRow, ...restRows] = rows;
   const looksLikeHeader =
-    firstRow.length >= 2 &&
     firstRow[0]?.toLocaleLowerCase().includes("id") &&
-    firstRow[1]?.toLocaleLowerCase().includes("name");
+    (firstRow[1]?.toLocaleLowerCase().includes("name") ||
+      (firstRow[1]?.toLocaleLowerCase().includes("email") &&
+        firstRow[2]?.toLocaleLowerCase().includes("name")) ||
+      firstRow[2]?.toLocaleLowerCase().includes("name"));
 
   const dataRows = looksLikeHeader ? restRows : rows;
 
   return dataRows.map((row) => ({
     [PASTED_ID_COLUMN]: row[0] ?? "",
-    [PASTED_NAME_COLUMN]: row.slice(1).join(", ").trim(),
+    [PASTED_EMAIL_COLUMN]: row[1] ?? "",
+    [PASTED_NAME_COLUMN]: row.slice(2).join(", ").trim(),
   }));
 }
 
 function buildExistingRosterRows(
-  students: Array<{ studentId: string; displayName: string; rawName: string }>,
+  students: Array<{ studentId: string; schoolEmail?: string; displayName: string; rawName: string }>,
 ): CsvRow[] {
   return students.map((student) => ({
     [PASTED_ID_COLUMN]: student.studentId,
+    [PASTED_EMAIL_COLUMN]: student.schoolEmail ?? "",
     [PASTED_NAME_COLUMN]: student.displayName || student.rawName,
   }));
 }
 
 function buildExistingRosterText(
-  students: Array<{ studentId: string; displayName: string; rawName: string }>,
+  students: Array<{ studentId: string; schoolEmail?: string; displayName: string; rawName: string }>,
 ) {
   return students
-    .map((student) => `${student.studentId}\t${student.displayName || student.rawName}`)
+    .map(
+      (student) =>
+        `${student.studentId}\t${student.schoolEmail ?? ""}\t${student.displayName || student.rawName}`,
+    )
     .join("\n");
 }
 
@@ -125,6 +155,7 @@ export function RosterImportForm() {
   const [mapping, setMapping] = useState<ColumnMapping>({
     nameColumn: null,
     studentIdColumn: null,
+    schoolEmailColumn: null,
     titleColumn: null,
   });
   const [parseError, setParseError] = useState<string | null>(null);
@@ -143,10 +174,20 @@ export function RosterImportForm() {
   const hasFileSourceData = importSource === "file" && (Boolean(fileName) || rows.length > 0);
   const hasPasteSourceData =
     importSource === "paste" && (Boolean(pastedText.trim()) || rows.length > 0);
-  const importedStudentIds = new Set(preview.validStudents.map((student) => student.studentId));
+  const importedStudentKeys = new Set(
+    preview.validStudents.map((student) => buildStudentIdentityKey(student)).filter(Boolean),
+  );
   const omittedStudents =
     isEditingExistingRoster && existingRoster
-      ? existingRoster.students.filter((student) => !importedStudentIds.has(student.studentId))
+      ? existingRoster.students.filter(
+          (student) =>
+            !importedStudentKeys.has(
+              buildStudentIdentityKey({
+                studentId: student.studentId || undefined,
+                schoolEmail: student.schoolEmail,
+              }),
+            ),
+        )
       : [];
   const [deactivateMissing, setDeactivateMissing] = useState(false);
 
@@ -193,13 +234,14 @@ export function RosterImportForm() {
     const seededRows = buildExistingRosterRows(existingRoster.students);
     const seededMapping: ColumnMapping = {
       studentIdColumn: PASTED_ID_COLUMN,
+      schoolEmailColumn: PASTED_EMAIL_COLUMN,
       nameColumn: PASTED_NAME_COLUMN,
       titleColumn: null,
     };
 
     setSourceMode("paste");
     setImportSource("paste");
-    setHeaders([PASTED_ID_COLUMN, PASTED_NAME_COLUMN]);
+    setHeaders([PASTED_ID_COLUMN, PASTED_EMAIL_COLUMN, PASTED_NAME_COLUMN]);
     setRows(seededRows);
     setFileName("");
     setPastedText(buildExistingRosterText(existingRoster.students));
@@ -261,7 +303,7 @@ export function RosterImportForm() {
     setImportSource(null);
     setParseError(null);
     setSubmitError(null);
-    setMapping({ nameColumn: null, studentIdColumn: null, titleColumn: null });
+    setMapping({ nameColumn: null, studentIdColumn: null, schoolEmailColumn: null, titleColumn: null });
     setAreOptionsOpen(false);
     setHelpModal(null);
     setPastedRosterName(nextGeneratedRosterName);
@@ -307,7 +349,11 @@ export function RosterImportForm() {
       setPastedRosterName(generateRosterName());
       setAreOptionsOpen(false);
       setHelpModal(null);
-      applyMapping({ nameColumn: null, studentIdColumn: null, titleColumn: null }, [], null);
+      applyMapping(
+        { nameColumn: null, studentIdColumn: null, schoolEmailColumn: null, titleColumn: null },
+        [],
+        null,
+      );
       if (!rosterNameTouched) {
         setRosterName(existingRosterName);
       }
@@ -338,7 +384,9 @@ export function RosterImportForm() {
       setPastedText("");
       setImportSource("file");
       setPastedRosterName(generateRosterName());
-      setAreOptionsOpen(!(nextMapping.nameColumn && nextMapping.studentIdColumn));
+      setAreOptionsOpen(
+        !(nextMapping.nameColumn && (nextMapping.studentIdColumn || nextMapping.schoolEmailColumn)),
+      );
       setHelpModal(null);
       applyMapping(nextMapping, normalizedRows, "file");
     } catch (error) {
@@ -350,7 +398,11 @@ export function RosterImportForm() {
       setPastedRosterName(generateRosterName());
       setAreOptionsOpen(false);
       setHelpModal(null);
-      applyMapping({ nameColumn: null, studentIdColumn: null, titleColumn: null }, [], null);
+      applyMapping(
+        { nameColumn: null, studentIdColumn: null, schoolEmailColumn: null, titleColumn: null },
+        [],
+        null,
+      );
       if (!rosterNameTouched) {
         setRosterName(existingRosterName);
       }
@@ -370,7 +422,11 @@ export function RosterImportForm() {
         setPastedRosterName(generateRosterName());
         setAreOptionsOpen(false);
         setHelpModal(null);
-        applyMapping({ nameColumn: null, studentIdColumn: null, titleColumn: null }, [], null);
+        applyMapping(
+          { nameColumn: null, studentIdColumn: null, schoolEmailColumn: null, titleColumn: null },
+          [],
+          null,
+        );
         if (!rosterNameTouched) {
           setRosterName(existingRosterName);
         }
@@ -380,9 +436,10 @@ export function RosterImportForm() {
 
     try {
       const pastedRows = parsePastedStudentList(value);
-      const pastedHeaders = [PASTED_ID_COLUMN, PASTED_NAME_COLUMN];
+      const pastedHeaders = [PASTED_ID_COLUMN, PASTED_EMAIL_COLUMN, PASTED_NAME_COLUMN];
       const nextMapping: ColumnMapping = {
         studentIdColumn: PASTED_ID_COLUMN,
+        schoolEmailColumn: PASTED_EMAIL_COLUMN,
         nameColumn: PASTED_NAME_COLUMN,
         titleColumn: null,
       };
@@ -411,7 +468,11 @@ export function RosterImportForm() {
       setPastedRosterName(generateRosterName());
       setAreOptionsOpen(false);
       setHelpModal(null);
-      applyMapping({ nameColumn: null, studentIdColumn: null, titleColumn: null }, [], null);
+      applyMapping(
+        { nameColumn: null, studentIdColumn: null, schoolEmailColumn: null, titleColumn: null },
+        [],
+        null,
+      );
       if (!rosterNameTouched) {
         setRosterName(existingRosterName);
       }
@@ -623,7 +684,7 @@ export function RosterImportForm() {
               </div>
 
               {importSource === "file" && areOptionsOpen ? (
-                <div className="grid gap-4 sm:grid-cols-2">
+                <div className="grid gap-4 sm:grid-cols-3">
                   <label className="block">
                     <span className="mb-2 block text-sm font-medium text-slate-700">Name column</span>
                     <select
@@ -653,6 +714,27 @@ export function RosterImportForm() {
                         applyMapping({
                           ...mapping,
                           studentIdColumn: event.target.value || null,
+                        })
+                      }
+                      className="h-12 w-full rounded-2xl border border-slate-300 bg-white px-4 text-base text-slate-950 outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
+                    >
+                      <option value="">Select a column</option>
+                      {headers.map((header) => (
+                        <option key={header} value={header}>
+                          {header}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label className="block">
+                    <span className="mb-2 block text-sm font-medium text-slate-700">School email column</span>
+                    <select
+                      value={mapping.schoolEmailColumn ?? ""}
+                      onChange={(event) =>
+                        applyMapping({
+                          ...mapping,
+                          schoolEmailColumn: event.target.value || null,
                         })
                       }
                       className="h-12 w-full rounded-2xl border border-slate-300 bg-white px-4 text-base text-slate-950 outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
@@ -744,18 +826,23 @@ export function RosterImportForm() {
                         </span>
                       </th>
                       <th className="px-4 py-3 font-medium text-slate-600">Student ID</th>
+                      <th className="px-4 py-3 font-medium text-slate-600">School Email</th>
                       <th className="px-4 py-3 font-medium text-slate-600">Status</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 bg-white">
                     {preview.rows.slice(0, 50).map((row) => (
-                      <tr key={`${row.studentId}-${row.rowNumber}`} className={row.errors.length ? "bg-rose-50/70" : ""}>
+                      <tr
+                        key={`${row.studentId ?? row.schoolEmail ?? "row"}-${row.rowNumber}`}
+                        className={row.errors.length ? "bg-rose-50/70" : ""}
+                      >
                         <td className="px-4 py-3 text-slate-500">{row.rowNumber}</td>
                         <td className="px-4 py-3">
                           <div className="font-medium text-slate-900">{row.displayName || row.rawName || "Missing name"}</div>
                           <div className="mt-1 text-xs text-slate-500">{row.rawName}</div>
                         </td>
                         <td className="px-4 py-3 text-slate-700">{row.studentId || "Missing"}</td>
+                        <td className="px-4 py-3 text-slate-700">{row.schoolEmail || "Missing"}</td>
                         <td className="px-4 py-3">
                           {row.errors.length === 0 ? (
                             <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-emerald-700">

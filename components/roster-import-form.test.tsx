@@ -93,4 +93,28 @@ describe("RosterImportForm", () => {
     expect(dialog).toBeInTheDocument();
     expect(within(dialog).getByText("Paste or type student ID and name")).toBeInTheDocument();
   });
+
+  it("accepts email-only CSV imports", async () => {
+    const { container } = render(<RosterImportForm />);
+
+    const csvContents = ["Student Name,School Email", "Stewart Chan,stew.chan@example.edu"].join("\n");
+    const file = new File([csvContents], "roster.csv", { type: "text/csv" });
+    Object.defineProperty(file, "text", {
+      value: vi.fn().mockResolvedValue(csvContents),
+    });
+
+    const fileInput = container.querySelector('input[type="file"]');
+    expect(fileInput).not.toBeNull();
+
+    fireEvent.change(fileInput!, {
+      target: { files: [file] },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("stew.chan@example.edu")).toBeInTheDocument();
+    });
+
+    expect(screen.queryByText(/Choose at least one identifier column/i)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Create roster/i })).toBeEnabled();
+  });
 });

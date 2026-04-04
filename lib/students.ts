@@ -1,5 +1,6 @@
 export type NormalizedStudent = {
-  studentId: string;
+  studentId?: string;
+  schoolEmail?: string;
   rawName: string;
   firstName: string;
   lastName: string;
@@ -10,6 +11,7 @@ export type NormalizedStudent = {
 export type ColumnMapping = {
   nameColumn: string | null;
   studentIdColumn: string | null;
+  schoolEmailColumn: string | null;
   titleColumn: string | null;
 };
 
@@ -76,10 +78,20 @@ export function parseStudentName(rawName: string) {
   };
 }
 
-export function normalizeStudent(rawName: string, studentId: string): NormalizedStudent {
+function normalizeSchoolEmail(schoolEmail: string) {
+  const cleaned = cleanValue(schoolEmail);
+  return cleaned ? cleaned.toLocaleLowerCase() : undefined;
+}
+
+export function buildStudentIdentityKey(student: Pick<NormalizedStudent, "studentId" | "schoolEmail">) {
+  return student.studentId ? `student:${student.studentId}` : student.schoolEmail ? `email:${student.schoolEmail}` : "";
+}
+
+export function normalizeStudent(rawName: string, studentId: string, schoolEmail?: string): NormalizedStudent {
   const parsedName = parseStudentName(rawName);
   return {
-    studentId: cleanValue(studentId),
+    studentId: cleanValue(studentId) || undefined,
+    schoolEmail: normalizeSchoolEmail(schoolEmail ?? ""),
     rawName: parsedName.rawName,
     firstName: parsedName.firstName,
     lastName: parsedName.lastName,
@@ -108,6 +120,15 @@ export function guessColumnMapping(headers: string[]): ColumnMapping {
     )?.raw ??
     lowered.find(({ normalized }) => normalized.includes("id"))?.raw ??
     null;
+  const schoolEmailColumn =
+    lowered.find(
+      ({ normalized }) =>
+        normalized.includes("school email") ||
+        normalized.includes("student email") ||
+        normalized.includes("email address"),
+    )?.raw ??
+    lowered.find(({ normalized }) => normalized === "email" || normalized.includes("email"))?.raw ??
+    null;
 
   const titleColumn =
     lowered.find(
@@ -120,7 +141,7 @@ export function guessColumnMapping(headers: string[]): ColumnMapping {
     lowered.find(({ normalized }) => normalized.includes("title"))?.raw ??
     null;
 
-  return { nameColumn, studentIdColumn, titleColumn };
+  return { nameColumn, studentIdColumn, schoolEmailColumn, titleColumn };
 }
 
 function inferRosterName(rows: CsvRow[], titleColumn: string | null) {
@@ -166,8 +187,8 @@ export function buildImportPreview(
     errors.push("Choose the column containing student names.");
   }
 
-  if (!mapping.studentIdColumn) {
-    errors.push("Choose the column containing student IDs.");
+  if (!mapping.studentIdColumn && !mapping.schoolEmailColumn) {
+    errors.push("Choose at least one identifier column: student ID or school email.");
   }
 
   if (errors.length > 0) {
@@ -183,16 +204,17 @@ export function buildImportPreview(
 
   const previewRows = rows.map((row, index) => {
     const rawName = cleanValue(row[mapping.nameColumn!]);
-    const studentId = cleanValue(row[mapping.studentIdColumn!]);
-    const normalized = normalizeStudent(rawName, studentId);
+    const studentId = mapping.studentIdColumn ? cleanValue(row[mapping.studentIdColumn]) : "";
+    const schoolEmail = mapping.schoolEmailColumn ? cleanValue(row[mapping.schoolEmailColumn]) : "";
+    const normalized = normalizeStudent(rawName, studentId, schoolEmail);
     const rowErrors: string[] = [];
 
     if (!normalized.rawName) {
       rowErrors.push("Missing name.");
     }
 
-    if (!normalized.studentId) {
-      rowErrors.push("Missing student ID.");
+    if (!normalized.studentId && !normalized.schoolEmail) {
+      rowErrors.push("Missing student ID or school email.");
     }
 
     return {
@@ -203,23 +225,34 @@ export function buildImportPreview(
     };
   });
 
-  const counts = new Map<string, number>();
+  const studentIdCounts = new Map<string, number>();
+  const schoolEmailCounts = new Map<string, number>();
   for (const row of previewRows) {
-    if (!row.studentId) {
-      continue;
+    if (row.studentId) {
+      studentIdCounts.set(row.studentId, (studentIdCounts.get(row.studentId) ?? 0) + 1);
     }
-    counts.set(row.studentId, (counts.get(row.studentId) ?? 0) + 1);
+    if (row.schoolEmail) {
+      schoolEmailCounts.set(row.schoolEmail, (schoolEmailCounts.get(row.schoolEmail) ?? 0) + 1);
+    }
   }
 
-  const duplicateStudentIds = [...counts.entries()]
+  const duplicateStudentIds = [...studentIdCounts.entries()]
     .filter(([, count]) => count > 1)
     .map(([studentId]) => studentId);
+  const duplicateSchoolEmails = [...schoolEmailCounts.entries()]
+    .filter(([, count]) => count > 1)
+    .map(([schoolEmail]) => schoolEmail);
 
-  const duplicateSet = new Set(duplicateStudentIds);
+  const duplicateStudentIdSet = new Set(duplicateStudentIds);
+  const duplicateSchoolEmailSet = new Set(duplicateSchoolEmails);
   for (const row of previewRows) {
-    if (duplicateSet.has(row.studentId)) {
+    if (row.studentId && duplicateStudentIdSet.has(row.studentId)) {
       row.isDuplicate = true;
       row.errors.push("Duplicate student ID in this import.");
+    }
+    if (row.schoolEmail && duplicateSchoolEmailSet.has(row.schoolEmail)) {
+      row.isDuplicate = true;
+      row.errors.push("Duplicate school email in this import.");
     }
     if (row.studentId && existingStudentIdSet.has(row.studentId)) {
       row.errors.push("Student ID already exists in this roster.");
@@ -230,6 +263,10 @@ export function buildImportPreview(
     errors.push("Resolve duplicate student IDs before importing.");
   }
 
+  if (duplicateSchoolEmails.length > 0) {
+    errors.push("Resolve duplicate school emails before importing.");
+  }
+
   if (previewRows.some((row) => row.errors.includes("Student ID already exists in this roster."))) {
     errors.push("Resolve student IDs that already exist in this roster before importing.");
   }
@@ -238,6 +275,7 @@ export function buildImportPreview(
     .filter((row) => row.errors.length === 0)
     .map((row) => ({
       studentId: row.studentId,
+      schoolEmail: row.schoolEmail,
       rawName: row.rawName,
       firstName: row.firstName,
       lastName: row.lastName,

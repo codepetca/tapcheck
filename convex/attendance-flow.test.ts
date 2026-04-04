@@ -3,6 +3,7 @@
 import { convexTest } from "convex-test";
 import { describe, expect, it } from "vitest";
 import { api } from "./api";
+import { autoLinkParticipant } from "./participantLinks";
 import schema from "./schema";
 
 declare global {
@@ -322,5 +323,111 @@ describe("verified QR attendance flow", () => {
       status: "present",
       present: true,
     });
+  });
+
+  it("accepts email-only roster imports", async () => {
+    const t = convexTest(schema, modules);
+    const owner = t.withIdentity(ownerIdentity);
+
+    const rosterId = await owner.mutation(api.rosters.importCsv, {
+      name: "Email Roster",
+      students: [
+        {
+          studentId: undefined,
+          schoolEmail: "student@example.edu",
+          rawName: "Student One",
+          firstName: "Student",
+          lastName: "One",
+          displayName: "Student One",
+          sortKey: "one|student|student@example.edu",
+        },
+      ],
+    });
+
+    const roster = await owner.query(api.rosters.getById, { rosterId });
+    expect(roster?.students[0]).toMatchObject({
+      studentId: "",
+      schoolEmail: "student@example.edu",
+    });
+  });
+
+  it("clears stale auto-links when roster identifiers no longer resolve cleanly", async () => {
+    const { t, owner, rosterId } = await createRosterAndOpenSession();
+    const student = t.withIdentity(studentIdentity);
+    const currentStudent = await student.mutation(api.appUsers.ensureCurrent, {});
+    const ownerAppUser = await owner.mutation(api.appUsers.ensureCurrent, {});
+
+    await t.run(async (ctx) => {
+      const roster = await ctx.db.get(rosterId);
+      if (!roster) {
+        throw new Error("Expected roster.");
+      }
+
+      await ctx.db.insert("organization_memberships", {
+        appUserId: currentStudent._id,
+        organizationId: roster.organizationId,
+        role: "student",
+        status: "active",
+        studentId: "1001",
+        createdAt: 1,
+        updatedAt: 1,
+      });
+
+      const participant = await ctx.db
+        .query("participants")
+        .withIndex("by_rosterId_and_studentId", (q) => q.eq("rosterId", rosterId).eq("externalId", "1001"))
+        .unique();
+
+      if (!participant) {
+        throw new Error("Expected participant.");
+      }
+
+      await ctx.db.patch(participant._id, {
+        linkedAppUserId: currentStudent._id,
+        participantType: "identified_user",
+        linkStatus: "linked",
+        linkMethod: "student_id",
+        linkedAt: 1,
+        linkedByAppUserId: ownerAppUser._id,
+        externalId: "9999",
+        schoolEmail: undefined,
+        updatedAt: 2,
+      });
+
+      const refreshedParticipant = await ctx.db.get(participant._id);
+      if (!refreshedParticipant) {
+        throw new Error("Expected refreshed participant.");
+      }
+
+      await autoLinkParticipant(ctx, roster, refreshedParticipant, ownerAppUser._id);
+    });
+
+    await t.run(async (ctx) => {
+      const participants = await ctx.db
+        .query("participants")
+        .withIndex("by_rosterId_sortKey", (q) => q.eq("rosterId", rosterId))
+        .collect();
+      const participant = participants.find((entry) => entry.externalId === "9999");
+
+      expect(participant?.linkedAppUserId).toBeUndefined();
+      expect(participant?.linkStatus).toBe("review_needed");
+    });
+  });
+
+  it("keeps deactivated participants visible in an open session after roster re-import", async () => {
+    const { owner, rosterId, sessionId } = await createRosterAndOpenSession();
+
+    await owner.mutation(api.rosters.importIntoExisting, {
+      rosterId,
+      name: "Roster A",
+      students: [makeStudent("1002", "Baker, Jamie")],
+      deactivateMissing: true,
+    });
+
+    const liveSession = await owner.query(api.attendance.getLiveSessionRows, { sessionId });
+
+    expect(liveSession?.rows.map((row) => row.studentId)).toEqual(["1001", "1002"]);
+    expect(liveSession?.counts.total).toBe(2);
+    expect(liveSession?.counts.unmarked).toBe(2);
   });
 });

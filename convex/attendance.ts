@@ -98,17 +98,19 @@ async function getSessionParticipantList(ctx: QueryCtx, session: Doc<"sessions">
   const [participants, attendanceRecords] = await Promise.all([
     ctx.db
       .query("participants")
-      .withIndex("by_rosterId_active_sortKey", (q) =>
-        q.eq("rosterId", session.rosterId).eq("active", true),
-      )
+      .withIndex("by_rosterId_sortKey", (q) => q.eq("rosterId", session.rosterId))
       .collect(),
     ctx.db
       .query("attendance_records")
       .withIndex("by_sessionId", (q) => q.eq("sessionId", session._id))
       .collect(),
   ]);
+  const attendanceByParticipantId = new Set(attendanceRecords.map((record) => record.participantId));
+  const visibleParticipants = participants.filter(
+    (participant) => participant.active || attendanceByParticipantId.has(participant._id),
+  );
 
-  const rows = await loadSessionParticipants(ctx, session, participants, attendanceRecords);
+  const rows = await loadSessionParticipants(ctx, session, visibleParticipants, attendanceRecords);
   rows.sort((left, right) => {
     return (
       left.lastName.localeCompare(right.lastName, undefined, { sensitivity: "base" }) ||

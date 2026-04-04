@@ -13,7 +13,7 @@ import type { Id } from "./model";
 import { mutation, query, type MutationCtx, type QueryCtx } from "./server";
 
 const importedStudentValidator = v.object({
-  studentId: v.string(),
+  studentId: v.optional(v.string()),
   schoolEmail: v.optional(v.string()),
   rawName: v.string(),
   firstName: v.string(),
@@ -37,15 +37,18 @@ async function loadRosterParticipants(ctx: QueryCtx | MutationCtx, rosterId: Id<
     .collect();
 }
 
-function mapParticipantsByStudentId(
+function mapParticipantsByIdentifiers(
   participants: Array<{
     _id: Id<"participants">;
     externalId?: string;
+    schoolEmail?: string;
     linkedAppUserId?: Id<"app_users">;
   }>,
 ) {
   const duplicateStudentIds = new Set<string>();
+  const duplicateSchoolEmails = new Set<string>();
   const participantsByStudentId = new Map<string, (typeof participants)[number]>();
+  const participantsBySchoolEmail = new Map<string, (typeof participants)[number]>();
 
   for (const participant of participants) {
     if (!participant.externalId) {
@@ -54,10 +57,22 @@ function mapParticipantsByStudentId(
 
     if (participantsByStudentId.has(participant.externalId)) {
       duplicateStudentIds.add(participant.externalId);
+    } else {
+      participantsByStudentId.set(participant.externalId, participant);
+    }
+  }
+
+  for (const participant of participants) {
+    if (!participant.schoolEmail) {
       continue;
     }
 
-    participantsByStudentId.set(participant.externalId, participant);
+    if (participantsBySchoolEmail.has(participant.schoolEmail)) {
+      duplicateSchoolEmails.add(participant.schoolEmail);
+      continue;
+    }
+
+    participantsBySchoolEmail.set(participant.schoolEmail, participant);
   }
 
   if (duplicateStudentIds.size > 0) {
@@ -65,33 +80,79 @@ function mapParticipantsByStudentId(
     throw new Error(`Roster already contains duplicate student IDs: ${ids}.`);
   }
 
-  return participantsByStudentId;
+  if (duplicateSchoolEmails.size > 0) {
+    const emails = [...duplicateSchoolEmails].sort().join(", ");
+    throw new Error(`Roster already contains duplicate school emails: ${emails}.`);
+  }
+
+  return {
+    participantsByStudentId,
+    participantsBySchoolEmail,
+  };
 }
 
-function validateImportedStudents(students: Array<{ studentId: string }>) {
+function validateImportedStudents(students: Array<{ studentId?: string; schoolEmail?: string }>) {
   if (students.length === 0) {
     throw new Error("At least one valid student is required.");
   }
 
   const duplicateIds = new Set<string>();
+  const duplicateEmails = new Set<string>();
   const seenIds = new Set<string>();
+  const seenEmails = new Set<string>();
 
   for (const student of students) {
     const normalizedStudentId = normalizeStudentId(student.studentId);
-    if (!normalizedStudentId) {
-      throw new Error("Each imported student must have a student ID.");
+    const normalizedSchoolEmail = normalizeSchoolEmail(student.schoolEmail);
+
+    if (!normalizedStudentId && !normalizedSchoolEmail) {
+      throw new Error("Each imported student must have a student ID or school email.");
     }
 
-    if (seenIds.has(normalizedStudentId)) {
-      duplicateIds.add(normalizedStudentId);
+    if (normalizedStudentId) {
+      if (seenIds.has(normalizedStudentId)) {
+        duplicateIds.add(normalizedStudentId);
+      }
+
+      seenIds.add(normalizedStudentId);
     }
 
-    seenIds.add(normalizedStudentId);
+    if (normalizedSchoolEmail) {
+      if (seenEmails.has(normalizedSchoolEmail)) {
+        duplicateEmails.add(normalizedSchoolEmail);
+      }
+
+      seenEmails.add(normalizedSchoolEmail);
+    }
   }
 
   if (duplicateIds.size > 0) {
     throw new Error("Duplicate student IDs were found in the import.");
   }
+
+  if (duplicateEmails.size > 0) {
+    throw new Error("Duplicate school emails were found in the import.");
+  }
+}
+
+function findExistingParticipantForImport(
+  identifierMaps: ReturnType<typeof mapParticipantsByIdentifiers>,
+  student: { studentId?: string; schoolEmail?: string },
+) {
+  const normalizedStudentId = normalizeStudentId(student.studentId);
+  const normalizedSchoolEmail = normalizeSchoolEmail(student.schoolEmail);
+  const matchByStudentId = normalizedStudentId
+    ? identifierMaps.participantsByStudentId.get(normalizedStudentId)
+    : undefined;
+  const matchBySchoolEmail = normalizedSchoolEmail
+    ? identifierMaps.participantsBySchoolEmail.get(normalizedSchoolEmail)
+    : undefined;
+
+  if (matchByStudentId && matchBySchoolEmail && matchByStudentId._id !== matchBySchoolEmail._id) {
+    throw new Error("Roster import identifiers conflict with existing participants.");
+  }
+
+  return matchByStudentId ?? matchBySchoolEmail ?? null;
 }
 
 async function findAccessibleRosterMembership(
@@ -147,7 +208,7 @@ async function createParticipant(
   ctx: MutationCtx,
   args: {
     rosterId: Id<"rosters">;
-    studentId: string;
+    studentId?: string;
     schoolEmail?: string;
     rawName: string;
     firstName: string;
@@ -454,38 +515,24 @@ export const importIntoExisting = mutation({
     validateImportedStudents(args.students);
 
     const existingParticipants = await loadRosterParticipants(ctx, args.rosterId);
-    const existingByStudentId = mapParticipantsByStudentId(existingParticipants);
+    const identifierMaps = mapParticipantsByIdentifiers(existingParticipants);
     const now = Date.now();
+    const matchedParticipantIds = new Set<Id<"participants">>();
 
     await ctx.db.patch(args.rosterId, { name, updatedAt: now });
 
-    if (args.deactivateMissing) {
-      const incomingIds = new Set(args.students.map((student) => normalizeStudentId(student.studentId)));
-      for (const existingParticipant of existingParticipants) {
-        if (
-          existingParticipant.externalId &&
-          !incomingIds.has(existingParticipant.externalId) &&
-          existingParticipant.active
-        ) {
-          await ctx.db.patch(existingParticipant._id, {
-            active: false,
-            updatedAt: now,
-          });
-        }
-      }
-    }
-
     for (const student of args.students) {
       const studentId = normalizeStudentId(student.studentId);
-      if (!studentId) {
-        continue;
-      }
-
-      const existingParticipant = existingByStudentId.get(studentId);
+      const schoolEmail = normalizeSchoolEmail(student.schoolEmail);
+      const existingParticipant = findExistingParticipantForImport(identifierMaps, {
+        studentId,
+        schoolEmail,
+      });
       if (existingParticipant) {
+        matchedParticipantIds.add(existingParticipant._id);
         await ctx.db.patch(existingParticipant._id, {
           externalId: studentId,
-          schoolEmail: normalizeSchoolEmail(student.schoolEmail),
+          schoolEmail,
           rawName: student.rawName,
           firstName: student.firstName,
           lastName: student.lastName,
@@ -500,13 +547,13 @@ export const importIntoExisting = mutation({
           await autoLinkParticipant(ctx, roster, refreshedParticipant, appUser._id);
           await syncParticipantAttendanceRecords(ctx, refreshedParticipant);
         }
-        continue;
+          continue;
       }
 
       const participantId = await createParticipant(ctx, {
         rosterId: args.rosterId,
         studentId,
-        schoolEmail: student.schoolEmail,
+        schoolEmail,
         rawName: student.rawName,
         firstName: student.firstName,
         lastName: student.lastName,
@@ -517,7 +564,21 @@ export const importIntoExisting = mutation({
 
       const participant = await ctx.db.get(participantId);
       if (participant) {
+        matchedParticipantIds.add(participant._id);
         await autoLinkParticipant(ctx, roster, participant, appUser._id);
+      }
+    }
+
+    if (args.deactivateMissing) {
+      for (const existingParticipant of existingParticipants) {
+        if (matchedParticipantIds.has(existingParticipant._id) || !existingParticipant.active) {
+          continue;
+        }
+
+        await ctx.db.patch(existingParticipant._id, {
+          active: false,
+          updatedAt: now,
+        });
       }
     }
 

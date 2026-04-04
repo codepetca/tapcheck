@@ -296,10 +296,7 @@ export async function autoLinkParticipant(
 
   if (participant.linkedAppUserId) {
     await applyParticipantLink(ctx, participant, {
-      linkedAppUserId: participant.linkedAppUserId,
-      linkStatus: resolution.kind === "ambiguous" ? "review_needed" : "linked",
-      linkMethod: participant.linkMethod,
-      linkedByAppUserId: participant.linkedByAppUserId,
+      linkStatus: "review_needed",
     });
     return resolution;
   }
