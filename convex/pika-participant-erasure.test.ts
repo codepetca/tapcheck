@@ -130,6 +130,72 @@ describe("participant erasure contract and authentication", () => {
   });
 });
 
+describe("participant erasure and roster decommission exclusion", () => {
+  const decommission = (t: Test, action: "begin" | "tick" = "begin", rosterRef = request.roster_ref) =>
+    t.mutation(internal.pikaDecommission.advance, { payload: {
+      schema_version: 1, message_type: "roster.decommission", action,
+      installation_ref: request.installation_ref, roster_ref: rosterRef,
+      operation_ref: "decommission_0123456789abcdef0123456789abcdef",
+      actor_principal_ref: request.actor_principal_ref,
+    }, nonce: nonce(), requestTimestamp: Date.now() / 1000 });
+
+  it.each(["deleting", "blocked"] as const)("rejects decommission while a participant receipt is %s", async state => {
+    const t = makeTest(), fixture = await seed(t);
+    vi.stubEnv("PIKA_DECOMMISSION_MODE", "enabled");
+    if (state === "blocked") await t.run(ctx => ctx.db.insert("pika_outbox", {
+      installationRef: request.installation_ref, eventId: "unscopable", eventType: "attendance.session.closed",
+      correlationRef: "unknown", payloadJson: "{}", status: "failed", attemptCount: 0,
+      nextAttemptAt: 0, createdAt: 1, updatedAt: 1,
+    }));
+    expect(await advance(t)).toMatchObject({ state: "deleting" });
+    if (state === "blocked") expect(await advance(t, { action: "tick" })).toMatchObject({ state: "blocked" });
+    vi.stubEnv("PIKA_PARTICIPANT_ERASURE_MODE", "disabled");
+    expect(await decommission(t)).toEqual({ ok: false, code: "operation_conflict" });
+    expect(await t.run(ctx => ctx.db.query("pika_decommissions").collect())).toEqual([]);
+    expect(await t.run(async ctx => (await ctx.db.get(fixture.mapping.rosterId))?.pikaDecommissioned)).not.toBe(true);
+    expect(await advance(t, { action: "status" })).toMatchObject({ state, absence_verified: false });
+    expect(await advance(t)).toMatchObject({ state, absence_verified: false });
+    expect(await advance(t, { action: "tick" })).toMatchObject({ state, absence_verified: false });
+    // The exclusion is roster-scoped, including when the first operation is blocked.
+    expect(await decommission(t, "begin", "roster_other")).toMatchObject({ ok: true, state: "deleting" });
+  });
+
+  it("rejects participant begin once roster decommission has begun", async () => {
+    const t = makeTest(); await seed(t); vi.stubEnv("PIKA_DECOMMISSION_MODE", "enabled");
+    const winning = await decommission(t);
+    expect(winning).toMatchObject({ ok: true, state: "deleting" });
+    expect(await decommission(t)).toEqual(winning);
+    expect(await advance(t)).toEqual({ ok: false, code: "owner_not_authorized" });
+    expect(await t.run(ctx => ctx.db.query("pika_participant_erasures").collect())).toEqual([]);
+    vi.stubEnv("PIKA_DECOMMISSION_MODE", "disabled");
+    expect(await advance(t)).toEqual({ ok: false, code: "owner_not_authorized" });
+  });
+
+  it.each([true, false])("serializes concurrent starts without two active fences (participant first: %s)", async participantFirst => {
+    const t = makeTest(); await seed(t); vi.stubEnv("PIKA_DECOMMISSION_MODE", "enabled");
+    // convex-test serializes transactions; exercise both possible committed
+    // orders. Hosted OCC is supported by the overlapping indexed/roster reads.
+    const starts = participantFirst ? [() => advance(t), () => decommission(t)] : [() => decommission(t), () => advance(t)];
+    const results = await Promise.all(starts.map(start => start()));
+    expect(results.filter(result => result.ok)).toHaveLength(1);
+    expect(await t.run(async ctx => (await ctx.db.query("pika_participant_erasures").collect()).length +
+      (await ctx.db.query("pika_decommissions").collect()).length)).toBe(1);
+  });
+
+  it("allows decommission after verified participant erasure and preserves its receipt", async () => {
+    const t = makeTest(); await seed(t); vi.stubEnv("PIKA_DECOMMISSION_MODE", "enabled");
+    await advance(t);
+    const receipt = await finish(t);
+    expect(receipt).toMatchObject({ state: "deleted", absence_verified: true });
+    let result = await decommission(t);
+    expect(result).toMatchObject({ ok: true, state: "deleting" });
+    for (let i = 0; result.ok && result.state !== "deleted" && i < 100; i++) result = await decommission(t, "tick");
+    expect(result).toMatchObject({ state: "deleted", absence_verified: true });
+    expect(await advance(t, { action: "status" })).toEqual(receipt);
+    expect(await advance(t, { action: "tick" })).toEqual(receipt);
+  });
+});
+
 describe("exact participant graph and permanent fences", () => {
   it("resumes lost responses and erases accepted/invalidated facts, every outbox state, caches and actor/detail events; preserves classmates and shared accounts", async () => {
     const t = makeTest(), fixture = await seed(t);

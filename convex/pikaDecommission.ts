@@ -224,6 +224,14 @@ export const advance = internalMutation({
     if (!tenant || tenant.organizationId !== roster.organizationId || organization?.status !== "active") {
       return { ok: false as const, code: "owner_not_authorized" };
     }
+    // Keep the roster available until each participant operation has verified
+    // absence. These indexed reads conflict with a concurrent participant begin;
+    // its roster read likewise conflicts with this mutation's roster fence.
+    for (const state of ["deleting", "blocked"] as const) {
+      const pending = await ctx.db.query("pika_participant_erasures")
+        .withIndex("by_rosterId_and_state", q => q.eq("rosterId", roster._id).eq("state", state)).first();
+      if (pending) return { ok: false as const, code: "operation_conflict" };
+    }
     const now = Date.now();
     const id = await ctx.db.insert("pika_decommissions", {
       installationRef: payload.installation_ref, rosterRef: payload.roster_ref,

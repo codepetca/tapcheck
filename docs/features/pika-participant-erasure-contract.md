@@ -96,6 +96,14 @@ erasure fence is rejected because it cannot express a Pika membership generation
 Pika remains its membership writer. No standalone roster behavior changes without
 a persisted fence.
 
+Whole-roster decommission cannot begin while this roster has a `deleting` or
+`blocked` participant receipt: two bounded indexed reads return `operation_conflict`
+before the roster fence is written. Conversely, the roster fence rejects new
+participant begins. These transactional reads protect either concurrent commit
+order. Disabling flags does not remove either fence. Finish or resolve the
+participant operation first; a verified `deleted` receipt allows decommission
+and remains retrievable after the roster is gone.
+
 Current signed `student_check_in` gains an optional `participant_ref`, validated
 against that actor's active membership before success replay. Legacy actor-only
 scans remain supported for unaffected scopes. Once an actor has an erased generation
@@ -141,7 +149,10 @@ wrong scope/actor/operation, disabled flags, blocked/mixed copies, verification
 leftovers, HTTP generation handling and preserved classmates/accounts. Adversarial
 tests cover malformed cache enums/facts, result/resource mismatch, peer/orphaned
 outbox facts, wrong occurrence ownership and correlation. Native owner/token/export
-reads exclude fenced rows and related audit details immediately after begin. Shared
+reads exclude fenced rows and related audit details immediately after begin. The
+overlap tests exercise both start orders, concurrent serialized starts, persisted
+fences with flags disabled and decommission after verified participant completion.
+The local harness serializes transactions; hosted OCC is not live-tested. Shared
 attendance, auth, integration, outbox and decommission tests also run. No browser
 UI or clipboard behavior changes; HTTP and mutation tests cover these boundaries.
 The PR workflow runs the locked dependencies, tests, typecheck, lint and plain
@@ -152,3 +163,12 @@ changed, so the screen rubric is not applicable. Reused the bounded provider
 protocol without adding a generic workflow engine or scheduler. Release, schema
 deployment, rollout, Pika adapter/coordinator, backups and complete Phase 3 exit
 evidence require their own approvals and verification.
+
+Merging to `main` currently triggers a Vercel Preview build whose `build:vercel`
+command deploys Convex before building Next. Its preview key selects the Convex
+preview identifier `main`. Merge approval must therefore also cover that automatic
+hosted deployment and additive schema/index installation. It does not authorize
+enabling participant erasure or running a live erase. The schema adds one empty
+receipt table with six indexes, one participant index on `attendance_records`,
+and two participant indexes on `pika_check_ins`; no existing field, default or
+backfill changes.

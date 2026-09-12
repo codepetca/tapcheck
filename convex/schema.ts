@@ -268,6 +268,7 @@ export default defineSchema({
     .index("by_installationRef_and_operationRef", ["installationRef", "operationRef"])
     .index("by_participantId", ["participantId"])
     .index("by_rosterId", ["rosterId"])
+    .index("by_rosterId_and_state", ["rosterId", "state"])
     .index("by_rosterId_and_subjectDigest_and_state", ["rosterId", "subjectDigest", "state"]),
 
   pika_installation_tenants: defineTable({
