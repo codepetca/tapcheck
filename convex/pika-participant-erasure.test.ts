@@ -326,4 +326,77 @@ describe("failure, replay and compatibility boundaries", () => {
     expect((await checkIn(t, scan("participant_peer"))).ok).toBe(false);
     expect(await checkIn(t, { ...scan(), actor_principal_ref: "principal_peer", actor_display_name: "Synthetic peer", idempotency_key: "peer-while-erasing" })).toMatchObject({ ok: true, result_code: "check_in_accepted" });
   });
+
+  it("hides fenced rows and audit details from owner, shared-token and export reads immediately", async () => {
+    const t = makeTest(), f = await seed(t);
+    vi.stubEnv("WORKOS_CLIENT_ID", "client_synthetic_erasure");
+    const identity = await t.run(async ctx => (await ctx.db.query("auth_identities")
+      .withIndex("by_appUserId", q => q.eq("appUserId", f.mapping.ownerAppUserId)).first())!);
+    const owner = t.withIdentity({ subject: identity.providerSubject, tokenIdentifier: identity.tokenIdentifier, client_id: "client_synthetic_erasure" });
+    await t.run(ctx => ctx.db.insert("attendance_events", { sessionId: f.sessionId, participantId: f.target._id,
+      actorType: "student", eventType: "student_check_in", result: "review_needed", createdAt: Date.now() }));
+    expect((await owner.query(api.attendance.getSessionExport, { sessionId: f.sessionId }))?.rows).toHaveLength(2);
+    await advance(t);
+    const staffRows = await owner.query(api.attendance.getLiveSessionRows, { sessionId: f.sessionId });
+    const sharedRows = await t.query(api.attendance.getLiveSessionRowsByToken, { token: "synthetic_history_token_123456789" });
+    for (const result of [staffRows, sharedRows]) {
+      expect(result?.rows.map(row => row.participantId)).toEqual([f.peer._id]);
+      expect(result?.counts.total).toBe(1);
+      expect(result?.unresolvedEvents).toEqual([]);
+    }
+    expect((await owner.query(api.attendance.getSessionExport, { sessionId: f.sessionId }))?.rows.map(row => row.displayName)).toEqual(["Synthetic peer"]);
+    expect((await owner.query(api.rosters.getById, { rosterId: f.mapping.rosterId }))?.students.map(p => p._id)).toEqual([f.peer._id]);
+    await finish(t);
+    const fresh = roster(); fresh.revision = 2; fresh.idempotency_key = "read-fresh"; fresh.participants[0]!.participant_ref = "participant_fresh";
+    await snapshot(t, fresh);
+    expect((await owner.query(api.attendance.getSessionExport, { sessionId: f.sessionId }))?.rows).toHaveLength(2);
+  });
+
+  it.each(["invalid_enum", "wrong_occurrence", "wrong_resource", "malformed_fact"])("blocks under-validated or inconsistent cache shape: %s", async kind => {
+    const t = makeTest(); await seed(t); await checkIn(t);
+    const id = await t.run(async ctx => {
+      const row = (await ctx.db.query("pika_idempotency").withIndex("by_installationRef_and_idempotencyKey", q =>
+        q.eq("installationRef", request.installation_ref).eq("idempotencyKey", "scan_one")).unique())!;
+      const result = JSON.parse(row.resultJson!);
+      if (kind === "invalid_enum") {
+        delete result.check_in; result.outcome = "rejected"; result.result_code = "Synthetic target / target@example.invalid";
+      } else if (kind === "wrong_occurrence") result.occurrence_ref = "wrong_occurrence";
+      else if (kind === "wrong_resource") {
+        const otherRoster = (await ctx.db.query("pika_integrated_rosters").withIndex("by_installationRef_and_rosterRef", q =>
+          q.eq("installationRef", request.installation_ref).eq("rosterRef", "roster_other")).unique())!;
+        const occurrence = (await ctx.db.query("attendance_occurrences").first())!;
+        const occurrenceId = await ctx.db.insert("attendance_occurrences", { rosterId: otherRoster.rosterId, title: "Other occurrence", date: "2026-09-12",
+          opensAt: occurrence.opensAt, closesAt: occurrence.closesAt, status: "scheduled", sessionRevision: 1,
+          createdByAppUserId: otherRoster.ownerAppUserId, createdAt: Date.now(), updatedAt: Date.now() });
+        await ctx.db.insert("pika_integrated_occurrences", { installationRef: request.installation_ref, rosterRef: "roster_other", occurrenceRef: "occurrence_other",
+          occurrenceId, sourceRevision: 1, createdAt: Date.now(), updatedAt: Date.now() });
+        await ctx.db.patch(row._id, { resourceRef: "occurrence_other" });
+      } else result.check_in.check_in_revision = -1;
+      await ctx.db.patch(row._id, { resultJson: JSON.stringify(result) });
+      return row._id;
+    });
+    await advance(t); expect(await finish(t)).toMatchObject({ state: "blocked", absence_verified: false });
+    expect(await t.run(ctx => ctx.db.get(id))).not.toBeNull();
+  });
+
+  it.each(["peer_fact", "orphan_fact", "wrong_roster", "wrong_correlation"])("preserves unscopable outbox copy instead of deleting it: %s", async kind => {
+    const t = makeTest(), f = await seed(t); await checkIn(t);
+    const peer = await checkIn(t, { ...scan(), actor_principal_ref: "principal_peer", actor_display_name: "Synthetic peer", idempotency_key: "mixed-peer" });
+    if (!peer.ok || !peer.check_in) throw new Error("Expected peer fixture");
+    const id = await t.run(async ctx => {
+      const row = (await ctx.db.query("pika_outbox").first())!;
+      const event = JSON.parse(row.payloadJson);
+      if (kind === "peer_fact") event.metadata.check_in_ref = peer.check_in!.check_in_ref;
+      else if (kind === "orphan_fact") event.metadata.check_in_ref = "orphan_check_in";
+      else if (kind === "wrong_roster") {
+        const mapping = (await ctx.db.query("pika_integrated_occurrences").withIndex("by_occurrenceId", q => q.eq("occurrenceId", f.occurrenceId)).unique())!;
+        await ctx.db.patch(mapping._id, { rosterRef: "roster_other" });
+      } else event.correlation_ref = "wrong_correlation";
+      await ctx.db.patch(row._id, { payloadJson: JSON.stringify(event) });
+      return row._id;
+    });
+    await advance(t); expect(await finish(t)).toMatchObject({ state: "blocked", absence_verified: false, deleted_count: 0 });
+    expect(await t.run(ctx => ctx.db.get(id))).not.toBeNull();
+    expect(await t.run(ctx => ctx.db.get(f.peer._id))).not.toBeNull();
+  });
 });

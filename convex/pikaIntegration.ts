@@ -1,4 +1,4 @@
-import { participantFence, participantIdFence, subjectFences } from "./pikaParticipantFence";
+import { participantFence, participantIdFence, rosterHasParticipantFences, subjectFences } from "./pikaParticipantFence";
 import { v } from "convex/values";
 import { isPikaRosterDecommissioned, assertRosterNotDecommissioned } from "./pikaDecommissionFence";
 import type {
@@ -219,7 +219,8 @@ export const applyRosterSnapshot = internalMutation({
       return { ok: false as const, code: "integration_state_invalid" as const };
     }
     // Read generation fences before any cached success or identity/name write.
-    for (const incoming of payload.participants) {
+    const hasParticipantFences = await rosterHasParticipantFences(ctx, payload.installation_ref, payload.roster_ref);
+    for (const incoming of hasParticipantFences ? payload.participants : []) {
       if (await participantFence(ctx, payload.installation_ref, payload.roster_ref, incoming.participant_ref)) {
         return { ok: false as const, code: "integration_state_invalid" as const };
       }
@@ -279,7 +280,7 @@ export const applyRosterSnapshot = internalMutation({
       return { ok: false as const, code: "stale_revision" as const };
     }
 
-    if (existingRosterMapping) {
+    if (existingRosterMapping && hasParticipantFences) {
       for (const incoming of payload.participants) {
         if (!incoming.principal_ref) continue;
         const identity = await ctx.db.query("auth_identities")
@@ -1009,7 +1010,8 @@ export const applyCheckInInvalidations = internalMutation({
     if (await isPikaRosterDecommissioned(ctx, payload.installation_ref, payload.roster_ref)) {
       return { ok: false as const, code: "integration_state_invalid" as const };
     }
-    for (const invalidation of payload.invalidations) {
+    const hasParticipantFences = await rosterHasParticipantFences(ctx, payload.installation_ref, payload.roster_ref);
+    for (const invalidation of hasParticipantFences ? payload.invalidations : []) {
       const fact = await ctx.db.query("pika_check_ins").withIndex("by_installationRef_and_checkInRef", q =>
         q.eq("installationRef", payload.installation_ref).eq("checkInRef", invalidation.check_in_ref)).unique();
       if (!fact || await participantFence(ctx, payload.installation_ref, payload.roster_ref, fact.participantRef)) {

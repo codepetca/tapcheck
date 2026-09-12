@@ -9,9 +9,16 @@ import { isPresentLikeStatus } from "./domain";
 import type { Doc, Id } from "./model";
 import type { MutationCtx, QueryCtx } from "./server";
 import { mutation, query } from "./server";
+import { participantIdFence, subjectFences } from "./pikaParticipantFence";
 
 type AttendanceRecordDoc = Doc<"attendance_records">;
 type ParticipantDoc = Doc<"participants">;
+
+async function visibleParticipants(ctx: QueryCtx, participants: ParticipantDoc[]) {
+  const visible = await Promise.all(participants.map(async participant =>
+    await participantIdFence(ctx, participant._id) ? null : participant));
+  return visible.filter(participant => participant !== null);
+}
 
 async function loadSessionParticipants(
   ctx: QueryCtx,
@@ -70,11 +77,11 @@ async function getSessionParticipantList(ctx: QueryCtx, session: Doc<"sessions">
       .collect(),
   ]);
   const attendanceByParticipantId = new Set(attendanceRecords.map((record) => record.participantId));
-  const visibleParticipants = participants.filter(
+  const sessionParticipants = participants.filter(
     (participant) => participant.active || attendanceByParticipantId.has(participant._id),
   );
 
-  const rows = await loadSessionParticipants(ctx, session, visibleParticipants, attendanceRecords);
+  const rows = await loadSessionParticipants(ctx, session, await visibleParticipants(ctx, sessionParticipants), attendanceRecords);
   rows.sort((left, right) => {
     return (
       left.lastName.localeCompare(right.lastName, undefined, { sensitivity: "base" }) ||
@@ -110,8 +117,17 @@ async function buildLiveSessionResult(
     .withIndex("by_sessionId_and_result", (q) => q.eq("sessionId", session._id).eq("result", "blocked"))
     .collect();
 
+  const visibleEvents = [];
+  for (const event of [...unresolvedEvents, ...blockedEvents]) {
+    if (event.participantId && await participantIdFence(ctx, event.participantId)) continue;
+    // Historical failed scans have only an actor; suppress those copies too.
+    // Fresh-generation events with an explicit participant ID remain visible.
+    if (!event.participantId && event.actorType === "student" && event.actorAppUserId &&
+      (await subjectFences(ctx, roster._id, event.actorAppUserId)).length) continue;
+    visibleEvents.push(event);
+  }
   const eventRows = await Promise.all(
-    [...unresolvedEvents, ...blockedEvents]
+    visibleEvents
       .sort((left, right) => right.createdAt - left.createdAt)
       .slice(0, 12)
       .map(async (event) => ({
@@ -375,7 +391,7 @@ export const getSessionExport = query({
       attendanceByParticipantId.set(attendanceRecord.participantId, attendanceRecord);
     }
 
-    const sortableRows = participants.map((participant) => {
+    const sortableRows = (await visibleParticipants(ctx, participants)).map((participant) => {
       const attendanceRecord = attendanceByParticipantId.get(participant._id);
       const status = attendanceRecord?.status ?? "unmarked";
       return {

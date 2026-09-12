@@ -26,6 +26,9 @@ jobs:
       - run: npm install --global pnpm@11.21.0
       - run: pnpm install --frozen-lockfile
       - run: pnpm test
+        env:
+          # Existing UI fixtures assert the classroom's Toronto display time.
+          TZ: America/Toronto
       - run: pnpm typecheck
       - run: pnpm lint
       # Plain Next build only. Never use build:vercel or hosted Convex codegen.

@@ -138,7 +138,10 @@ verified. A stable live-database receipt does not attest to physical backup eras
 Synthetic `convex-test` tests cover exact scope, accepted/invalidated history,
 all outbox statuses, cache replay, lost responses, bounded ticks, interruption,
 wrong scope/actor/operation, disabled flags, blocked/mixed copies, verification
-leftovers, HTTP generation handling and preserved classmates/accounts. Shared
+leftovers, HTTP generation handling and preserved classmates/accounts. Adversarial
+tests cover malformed cache enums/facts, result/resource mismatch, peer/orphaned
+outbox facts, wrong occurrence ownership and correlation. Native owner/token/export
+reads exclude fenced rows and related audit details immediately after begin. Shared
 attendance, auth, integration, outbox and decommission tests also run. No browser
 UI or clipboard behavior changes; HTTP and mutation tests cover these boundaries.
 The PR workflow runs the locked dependencies, tests, typecheck, lint and plain

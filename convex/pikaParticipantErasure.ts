@@ -2,6 +2,7 @@ import { v } from "convex/values";
 import { parseParticipantErasureRequest, type ParticipantErasureReceipt } from "../lib/attendance-contract/participant-erasure";
 import { sha256Hex } from "../lib/attendance-contract/v1/signing";
 import { validateV1Event } from "../lib/attendance-contract/v1/validate";
+import type { V1StudentCheckInResult } from "../lib/attendance-contract/v1/types";
 import type { Doc } from "./model";
 import { internalMutation, type MutationCtx } from "./server";
 import { subjectDigest } from "./pikaParticipantFence";
@@ -40,8 +41,27 @@ async function tick(ctx: MutationCtx, op: Operation) {
     for (const row of page.page) {
       let event;
       try { event = validateV1Event(JSON.parse(row.payloadJson)); } catch { event = null; }
-      if (!event?.ok || event.value.installation_ref !== row.installationRef || event.value.event_id !== row.eventId || event.value.event_type !== row.eventType) {
+      if (!event?.ok || event.value.installation_ref !== row.installationRef || event.value.event_id !== row.eventId ||
+        event.value.event_type !== row.eventType || event.value.correlation_ref !== row.correlationRef) {
         await block(ctx, op, "outbox_scope_unverifiable"); return;
+      }
+      const occurrence = await ctx.db.query("pika_integrated_occurrences")
+        .withIndex("by_installationRef_and_occurrenceRef", q => q.eq("installationRef", op.installationRef)
+          .eq("occurrenceRef", event.value.occurrence_ref)).unique();
+      const occurrenceDoc = occurrence ? await ctx.db.get(occurrence.occurrenceId) : null;
+      const rosterMapping = await ctx.db.query("pika_integrated_rosters")
+        .withIndex("by_installationRef_and_rosterRef", q => q.eq("installationRef", op.installationRef)
+          .eq("rosterRef", event.value.roster_ref)).unique();
+      if (!occurrence || occurrence.rosterRef !== event.value.roster_ref || !occurrenceDoc ||
+        occurrenceDoc.rosterId !== rosterMapping?.rosterId) {
+        await block(ctx, op, "outbox_scope_unverifiable"); return;
+      }
+      if ("participant_ref" in event.value.metadata) {
+        const metadata = event.value.metadata;
+        if (!await checkInBinding(ctx, op, occurrence, {
+          participant_ref: metadata.participant_ref, check_in_ref: metadata.check_in_ref,
+          check_in_revision: metadata.check_in_revision, accepted_at: metadata.accepted_at,
+        })) { await block(ctx, op, "outbox_scope_unverifiable"); return; }
       }
       if (event.value.roster_ref === op.rosterRef && "participant_ref" in event.value.metadata && event.value.metadata.participant_ref === op.participantRef) owned.push(row);
     }
@@ -57,13 +77,16 @@ async function tick(ctx: MutationCtx, op: Operation) {
       if (row.resultJson === undefined) continue;
       const mapping = await ctx.db.query("pika_integrated_occurrences")
         .withIndex("by_installationRef_and_occurrenceRef", q => q.eq("installationRef", op.installationRef).eq("occurrenceRef", row.resourceRef)).unique();
-      if (!mapping) { await block(ctx, op, "cache_scope_unverifiable"); return; }
-      if (mapping.rosterRef !== op.rosterRef) continue;
       let result;
       try { result = JSON.parse(row.resultJson); } catch { result = null; }
-      if (!validStudentResult(result) || row.messageType !== "student_check_in") {
+      if (!mapping || !validStudentResult(result) || row.messageType !== "student_check_in" ||
+        result.occurrence_ref !== row.resourceRef) {
         await block(ctx, op, "cache_scope_unverifiable"); return;
       }
+      if (result.check_in && !await checkInBinding(ctx, op, mapping, result.check_in)) {
+        await block(ctx, op, "cache_scope_unverifiable"); return;
+      }
+      if (mapping.rosterRef !== op.rosterRef) continue;
       if (result.check_in?.participant_ref === op.participantRef) owned.push(row);
     }
     if (!await removeRows(owned)) return;
@@ -147,16 +170,55 @@ async function tick(ctx: MutationCtx, op: Operation) {
 async function block(ctx: MutationCtx, op: Operation, code: string) {
   await ctx.db.patch(op._id, { state: "blocked", blockedCode: code, updatedAt: Date.now() });
 }
-function validStudentResult(value: unknown): value is { check_in?: { participant_ref: string } } {
+async function checkInBinding(
+  ctx: MutationCtx,
+  op: Operation,
+  occurrence: Doc<"pika_integrated_occurrences">,
+  fact: { participant_ref: string; check_in_ref: string; check_in_revision: number; accepted_at: string },
+) {
+  const installationRef = op.installationRef;
+  const stored = await ctx.db.query("pika_check_ins")
+    .withIndex("by_installationRef_and_checkInRef", q => q.eq("installationRef", installationRef).eq("checkInRef", fact.check_in_ref)).unique();
+  const mapping = await ctx.db.query("pika_integrated_participants")
+    .withIndex("by_installationRef_rosterRef_participantRef", q => q.eq("installationRef", installationRef)
+      .eq("rosterRef", occurrence.rosterRef).eq("participantRef", fact.participant_ref)).unique();
+  const participant = mapping ? await ctx.db.get(mapping.participantId) : null;
+  const occurrenceDoc = await ctx.db.get(occurrence.occurrenceId);
+  return Boolean(stored && mapping && participant && occurrenceDoc &&
+    stored.rosterRef === occurrence.rosterRef && stored.occurrenceRef === occurrence.occurrenceRef &&
+    stored.occurrenceId === occurrence.occurrenceId && stored.participantRef === fact.participant_ref &&
+    stored.participantId === mapping.participantId && participant.rosterId === occurrenceDoc.rosterId &&
+    stored.acceptedAt === Date.parse(fact.accepted_at) && fact.check_in_revision <= stored.checkInRevision &&
+    (occurrence.rosterRef !== op.rosterRef || fact.participant_ref !== op.participantRef || mapping.participantId === op.participantId));
+}
+
+function validStudentResult(value: unknown): value is V1StudentCheckInResult {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const r = value as Record<string, unknown>;
   if (Object.keys(r).some(k => !["ok", "schema_version", "outcome", "result_code", "occurrence_ref", "session_revision", "check_in"].includes(k)) ||
-    r.ok !== true || r.schema_version !== 1 || typeof r.occurrence_ref !== "string" || typeof r.session_revision !== "number") return false;
-  if (!r.check_in) return r.outcome === "rejected";
-  if (typeof r.check_in !== "object" || Array.isArray(r.check_in)) return false;
+    r.ok !== true || r.schema_version !== 1 || !opaqueRef(r.occurrence_ref) || !revision(r.session_revision)) return false;
+  if (r.outcome === "rejected") {
+    return !("check_in" in r) && typeof r.result_code === "string" &&
+      ["not_on_roster", "session_not_accepting", "invalid_check_in_token", "not_authorized"].includes(r.result_code);
+  }
+  if (!((r.outcome === "applied" && r.result_code === "check_in_accepted") ||
+    (r.outcome === "duplicate" && r.result_code === "already_checked_in"))) return false;
+  if (!r.check_in || typeof r.check_in !== "object" || Array.isArray(r.check_in)) return false;
   const fact = r.check_in as Record<string, unknown>;
-  return typeof fact.participant_ref === "string" && Object.keys(fact).every(k =>
-    ["check_in_ref", "participant_ref", "check_in_revision", "accepted_at", "invalidated_at", "reason_code"].includes(k));
+  return opaqueRef(fact.participant_ref) && opaqueRef(fact.check_in_ref) && revision(fact.check_in_revision) &&
+    instant(fact.accepted_at) && (fact.invalidated_at === undefined ||
+      (instant(fact.invalidated_at) && Date.parse(fact.invalidated_at) >= Date.parse(fact.accepted_at))) &&
+    (fact.reason_code === undefined || (fact.invalidated_at !== undefined && opaqueRef(fact.reason_code))) &&
+    Object.keys(fact).every(k => ["check_in_ref", "participant_ref", "check_in_revision", "accepted_at", "invalidated_at", "reason_code"].includes(k));
+}
+function opaqueRef(value: unknown): value is string {
+  return typeof value === "string" && /^[A-Za-z0-9._~-]{1,128}$/.test(value);
+}
+function revision(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
+function instant(value: unknown): value is string {
+  return typeof value === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/.test(value) && Number.isFinite(Date.parse(value));
 }
 
 export const advance = internalMutation({

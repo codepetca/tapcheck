@@ -9,6 +9,11 @@ export function participantFence(ctx: Ctx, installationRef: string, rosterRef: s
     .withIndex("by_installationRef_and_rosterRef_and_participantRef", q =>
       q.eq("installationRef", installationRef).eq("rosterRef", rosterRef).eq("participantRef", participantRef)).unique();
 }
+export async function rosterHasParticipantFences(ctx: Ctx, installationRef: string, rosterRef: string) {
+  return Boolean(await ctx.db.query("pika_participant_erasures")
+    .withIndex("by_installationRef_and_rosterRef_and_participantRef", q =>
+      q.eq("installationRef", installationRef).eq("rosterRef", rosterRef)).first());
+}
 export function participantIdFence(ctx: Ctx, participantId: Id<"participants">) {
   return ctx.db.query("pika_participant_erasures")
     .withIndex("by_participantId", q => q.eq("participantId", participantId)).unique();
