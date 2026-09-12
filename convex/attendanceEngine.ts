@@ -1,3 +1,4 @@
+import { assertParticipantNotErased, participantIdFence, assertNativeSubjectNotErased } from "./pikaParticipantFence";
 import { createShareToken } from "../lib/session-links";
 import { assertRosterNotDecommissioned } from "./pikaDecommissionFence";
 import { normalizeSchoolEmail, normalizeStudentId } from "./domain";
@@ -169,6 +170,7 @@ export async function openAttendanceSession(
 
   if (args.createAttendanceRecords !== false) {
     for (const participant of participants) {
+      if (await participantIdFence(ctx, participant._id)) continue;
       await ctx.db.insert("attendance_records", {
         sessionId,
         participantId: participant._id,
@@ -208,7 +210,7 @@ export async function closeAttendanceSession(
   }> = [];
 
   for (const attendanceRow of args.finalizeAttendanceRecords === false ? [] : attendanceRows) {
-    if (attendanceRow.status !== "unmarked") continue;
+    if (attendanceRow.status !== "unmarked" || await participantIdFence(ctx, attendanceRow.participantId)) continue;
     const recordRevision = (attendanceRow.recordRevision ?? 0) + 1;
     await ctx.db.patch(attendanceRow._id, {
       status: "absent",
@@ -258,6 +260,7 @@ export async function applyAttendanceMark(
 ) {
   if (args.actor.actorType !== "staff") throw new Error("Only staff can mark attendance.");
   await assertRosterNotDecommissioned(ctx, args.session.rosterId);
+  await assertParticipantNotErased(ctx, args.participantId);
   const participant = await ctx.db.get(args.participantId);
   if (!participant || participant.rosterId !== args.session.rosterId) {
     throw new Error("Student not found in this session.");
@@ -410,6 +413,7 @@ export async function studentCheckInAttendance(
 ): Promise<StudentCheckInEngineResult> {
   if (args.actor.actorType !== "student") throw new Error("Only students can self check in.");
   await assertRosterNotDecommissioned(ctx, args.session.rosterId);
+  await assertNativeSubjectNotErased(ctx, args.session.rosterId, args.actor.appUserId);
   const now = args.now ?? Date.now();
   const [appUser, roster] = await Promise.all([
     ctx.db.get(args.actor.appUserId),
@@ -474,6 +478,7 @@ export async function studentCheckInAttendance(
   }
 
   const participant = participantMatch.participant;
+  await assertParticipantNotErased(ctx, participant._id);
   const record = await ctx.db
     .query("attendance_records")
     .withIndex("by_sessionId_participantId", (q) =>

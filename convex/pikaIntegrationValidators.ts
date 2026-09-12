@@ -77,6 +77,7 @@ export const checkInInvalidateValidator = v.object({
 });
 
 export const studentCheckInValidator = v.object({
+  participant_ref: v.optional(v.string()),
   schema_version: v.literal(1),
   message_type: v.literal("student_check_in"),
   idempotency_key: v.string(),

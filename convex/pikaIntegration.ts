@@ -1,3 +1,4 @@
+import { participantFence, participantIdFence, subjectFences } from "./pikaParticipantFence";
 import { v } from "convex/values";
 import { isPikaRosterDecommissioned, assertRosterNotDecommissioned } from "./pikaDecommissionFence";
 import type {
@@ -217,6 +218,12 @@ export const applyRosterSnapshot = internalMutation({
     if (await isPikaRosterDecommissioned(ctx, payload.installation_ref, payload.roster_ref)) {
       return { ok: false as const, code: "integration_state_invalid" as const };
     }
+    // Read generation fences before any cached success or identity/name write.
+    for (const incoming of payload.participants) {
+      if (await participantFence(ctx, payload.installation_ref, payload.roster_ref, incoming.participant_ref)) {
+        return { ok: false as const, code: "integration_state_invalid" as const };
+      }
+    }
     const now = Date.now();
     const existingNonce = await ctx.db
       .query("pika_request_nonces")
@@ -272,6 +279,16 @@ export const applyRosterSnapshot = internalMutation({
       return { ok: false as const, code: "stale_revision" as const };
     }
 
+    if (existingRosterMapping) {
+      for (const incoming of payload.participants) {
+        if (!incoming.principal_ref) continue;
+        const identity = await ctx.db.query("auth_identities")
+          .withIndex("by_provider_and_providerSubject", q => q.eq("provider", "pika").eq("providerSubject", `pika:${payload.installation_ref}:${incoming.principal_ref}`)).unique();
+        if (identity && (await subjectFences(ctx, existingRosterMapping.rosterId, identity.appUserId)).some(f => f.state !== "deleted")) {
+          return { ok: false as const, code: "integration_state_invalid" as const };
+        }
+      }
+    }
     const owner = await ensurePikaRosterOwner(ctx, {
       installationRef: payload.installation_ref,
       tenantRef: payload.tenant_ref,
@@ -405,6 +422,7 @@ export const applyRosterSnapshot = internalMutation({
     }
 
     for (const { mapping, participant } of mappingByRef.values()) {
+      if (await participantIdFence(ctx, participant._id)) continue;
       if (incomingRefs.has(mapping.participantRef) || !participant.active) continue;
       await ctx.db.patch(participant._id, { active: false, updatedAt: now });
       await ctx.db.patch(mapping._id, { sourceRevision: payload.revision, updatedAt: now });
@@ -991,6 +1009,13 @@ export const applyCheckInInvalidations = internalMutation({
     if (await isPikaRosterDecommissioned(ctx, payload.installation_ref, payload.roster_ref)) {
       return { ok: false as const, code: "integration_state_invalid" as const };
     }
+    for (const invalidation of payload.invalidations) {
+      const fact = await ctx.db.query("pika_check_ins").withIndex("by_installationRef_and_checkInRef", q =>
+        q.eq("installationRef", payload.installation_ref).eq("checkInRef", invalidation.check_in_ref)).unique();
+      if (!fact || await participantFence(ctx, payload.installation_ref, payload.roster_ref, fact.participantRef)) {
+        return { ok: false as const, code: "check_in_not_found" as const };
+      }
+    }
     const now = Date.now();
     const existingNonce = await ctx.db
       .query("pika_request_nonces")
@@ -1162,6 +1187,29 @@ export const applyStudentCheckIn = internalMutation({
     if (await isPikaRosterDecommissioned(ctx, payload.installation_ref, payload.roster_ref)) {
       return { ok: false as const, code: "integration_state_invalid" as const };
     }
+    const rosterScope = await ctx.db.query("pika_integrated_rosters")
+      .withIndex("by_installationRef_and_rosterRef", q => q.eq("installationRef", payload.installation_ref).eq("rosterRef", payload.roster_ref)).unique();
+    const actorIdentity = await ctx.db.query("auth_identities")
+      .withIndex("by_provider_and_providerSubject", q => q.eq("provider", "pika").eq("providerSubject", `pika:${payload.installation_ref}:${payload.actor_principal_ref}`)).unique();
+    if (payload.participant_ref && await participantFence(ctx, payload.installation_ref, payload.roster_ref, payload.participant_ref)) {
+      return { ok: false as const, code: "integration_state_invalid" as const };
+    }
+    if (actorIdentity && rosterScope) {
+      const fences = await subjectFences(ctx, rosterScope.rosterId, actorIdentity.appUserId);
+      if (fences.some(f => f.state !== "deleted") || (fences.length && !payload.participant_ref)) {
+        return { ok: false as const, code: "integration_state_invalid" as const };
+      }
+    }
+    // Generation binding also precedes cache replay. An opaque ref cannot select
+    // another actor's membership, even with a previously valid idempotency key.
+    if (payload.participant_ref) {
+      const mapping = await ctx.db.query("pika_integrated_participants")
+        .withIndex("by_installationRef_rosterRef_participantRef", q => q.eq("installationRef", payload.installation_ref).eq("rosterRef", payload.roster_ref).eq("participantRef", payload.participant_ref!)).unique();
+      const participant = mapping ? await ctx.db.get(mapping.participantId) : null;
+      if (!participant || !participant.active || participant.linkedAppUserId !== actorIdentity?.appUserId || !actorIdentity) {
+        return { ok: false as const, code: "integration_state_invalid" as const };
+      }
+    }
     const now = Date.now();
     const existingNonce = await ctx.db
       .query("pika_request_nonces")
@@ -1194,6 +1242,9 @@ export const applyStudentCheckIn = internalMutation({
         return { ok: false as const, code: "idempotency_conflict" as const };
       }
       const stored = JSON.parse(idempotency.resultJson) as V1StudentCheckInResult;
+      if (stored.check_in && await participantFence(ctx, payload.installation_ref, payload.roster_ref, stored.check_in.participant_ref)) {
+        return { ok: false as const, code: "integration_state_invalid" as const };
+      }
       return { ...stored, outcome: "duplicate" as const };
     }
 
@@ -1312,6 +1363,10 @@ export const applyStudentCheckIn = internalMutation({
             return { ok: false as const, code: "integration_state_invalid" as const };
           }
 
+          if (await participantIdFence(ctx, participant._id) ||
+            (payload.participant_ref && payload.participant_ref !== participantMapping.participantRef)) {
+            return { ok: false as const, code: "integration_state_invalid" as const };
+          }
           const checkIns = await ctx.db
             .query("pika_check_ins")
             .withIndex("by_occurrenceId_and_participantId", (q) =>
@@ -1441,7 +1496,11 @@ export const getSessionSnapshot = internalQuery({
       .query("pika_check_ins")
       .withIndex("by_occurrenceId", (q) => q.eq("occurrenceId", occurrence._id))
       .collect();
-    const checkIns = storedCheckIns
+    const visibleCheckIns = [];
+    for (const checkIn of storedCheckIns) {
+      if (!await participantFence(ctx, args.installationRef, occurrenceMapping.rosterRef, checkIn.participantRef)) visibleCheckIns.push(checkIn);
+    }
+    const checkIns = visibleCheckIns
       .sort((left, right) =>
         left.acceptedAt - right.acceptedAt || left.checkInRef.localeCompare(right.checkInRef),
       )

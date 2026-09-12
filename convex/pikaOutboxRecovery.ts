@@ -1,3 +1,4 @@
+import { erasedEvent } from "./pikaParticipantFence";
 import { v } from "convex/values";
 import { validateV1Event } from "../lib/attendance-contract/v1/validate";
 import type { Doc } from "./model";
@@ -50,6 +51,7 @@ async function currentDisposition(
     parsed.value.correlation_ref !== row.correlationRef
   ) return "ineligible";
   const event = parsed.value;
+  if (await erasedEvent(ctx, event)) return "supersede";
   const mapping = await ctx.db
     .query("pika_integrated_occurrences")
     .withIndex("by_installationRef_and_occurrenceRef", (q) =>

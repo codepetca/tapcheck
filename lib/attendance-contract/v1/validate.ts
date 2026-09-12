@@ -360,8 +360,9 @@ function validateStudentCheckIn(value: Record<string, unknown>): V1ValidationRes
     "actor_principal_ref",
     "actor_display_name",
   ];
-  const problem = shapeProblem(value, keys) ?? baseMessageProblem(value);
+  const problem = shapeProblem(value, [...keys, "participant_ref"], keys) ?? baseMessageProblem(value);
   if (problem) return fail("invalid_envelope", problem);
+  if (value.participant_ref !== undefined && !isRef(value.participant_ref)) return fail("invalid_payload", "invalid participant_ref");
   if (!isRef(value.occurrence_ref)) return fail("invalid_payload", "invalid occurrence_ref");
   if (!isRef(value.check_in_token) || value.check_in_token.length < 20) {
     return fail("invalid_payload", "invalid check_in_token");
