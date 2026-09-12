@@ -1,0 +1,37 @@
+name: Validate PR
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.21.1
+      - run: npm install --global pnpm@11.21.0
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
+        env:
+          # Existing UI fixtures assert the classroom's Toronto display time.
+          TZ: America/Toronto
+      - run: pnpm typecheck
+      - run: pnpm lint
+      # Plain Next build only. Never use build:vercel or hosted Convex codegen.
+      - run: pnpm build
+        env:
+          NEXT_TELEMETRY_DISABLED: '1'

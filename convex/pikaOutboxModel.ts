@@ -1,3 +1,4 @@
+import { erasedEvent } from "./pikaParticipantFence";
 import { v } from "convex/values";
 import { internalMutation } from "./server";
 import { validateV1Event } from "../lib/attendance-contract/v1/validate";
@@ -33,11 +34,12 @@ export const claim = internalMutation({
       // Never dispatch a malformed payload or a fenced classroom, even if a
       // recovery sweep has requeued it. Already-in-flight bytes are fenced by Pika.
       const malformed = !event?.ok || event.value.installation_ref !== row.installationRef;
-      const fenced = event?.ok && await isPikaRosterDecommissioned(ctx, row.installationRef, event.value.roster_ref);
+      const participantErased = event?.ok && await erasedEvent(ctx, event.value);
+      const fenced = participantErased || (event?.ok && await isPikaRosterDecommissioned(ctx, row.installationRef, event.value.roster_ref));
       if (malformed || fenced) {
         await ctx.db.patch(row._id, { status: fenced ? "superseded" : "failed",
           leaseUntil: undefined, leaseToken: undefined, updatedAt: args.now,
-          lastErrorCode: fenced ? "roster_decommissioned" : "invalid_event_payload" });
+          lastErrorCode: participantErased ? "participant_erased" : fenced ? "roster_decommissioned" : "invalid_event_payload" });
         continue;
       }
       const leaseToken = `lease_${args.now}_${row.eventId}`;
@@ -68,6 +70,7 @@ export const complete = internalMutation({
       .withIndex("by_eventId", (q) => q.eq("eventId", args.eventId))
       .unique();
     if (!row || row.status !== "pending" || row.leaseToken !== args.leaseToken) return false;
+    if (await suppressErased(ctx, row)) return false;
     await ctx.db.patch(row._id, {
       status: "delivered",
       leaseUntil: undefined,
@@ -94,6 +97,7 @@ export const retry = internalMutation({
       .withIndex("by_eventId", (q) => q.eq("eventId", args.eventId))
       .unique();
     if (!row || row.status !== "pending" || row.leaseToken !== args.leaseToken) return false;
+    if (await suppressErased(ctx, row)) return false;
     await ctx.db.patch(row._id, {
       nextAttemptAt: args.nextAttemptAt,
       leaseUntil: undefined,
@@ -114,6 +118,7 @@ export const fail = internalMutation({
       .withIndex("by_eventId", (q) => q.eq("eventId", args.eventId))
       .unique();
     if (!row || row.status !== "pending" || row.leaseToken !== args.leaseToken) return false;
+    if (await suppressErased(ctx, row)) return false;
     await ctx.db.patch(row._id, {
       status: "failed",
       leaseUntil: undefined,
@@ -124,3 +129,11 @@ export const fail = internalMutation({
     return true;
   },
 });
+
+async function suppressErased(ctx: import("./server").MutationCtx, row: import("./model").Doc<"pika_outbox">) {
+  let parsed;
+  try { parsed = validateV1Event(JSON.parse(row.payloadJson)); } catch { return false; }
+  if (!parsed.ok || !await erasedEvent(ctx, parsed.value)) return false;
+  await ctx.db.patch(row._id, { status: "superseded", leaseToken: undefined, leaseUntil: undefined, lastErrorCode: "participant_erased" });
+  return true;
+}

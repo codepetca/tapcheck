@@ -99,6 +99,7 @@ export interface V1CheckInPresentationRequest
 }
 
 export interface V1StudentCheckIn extends V1MessageBase<"student_check_in"> {
+  participant_ref?: OpaqueRef;
   occurrence_ref: OpaqueRef;
   check_in_token: OpaqueRef;
   actor_principal_ref: OpaqueRef;

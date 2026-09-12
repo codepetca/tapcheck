@@ -1,3 +1,4 @@
+import { assertNativeRosterImportAllowed } from "./pikaParticipantFence";
 import { v } from "convex/values";
 import { buildDemoRosterStudents } from "../lib/demo-data";
 import {
@@ -509,6 +510,7 @@ export const importIntoExisting = mutation({
   handler: async (ctx, args) => {
     const { roster, appUser } = await requireAccessibleRoster(ctx, args.rosterId);
 
+    await assertNativeRosterImportAllowed(ctx, args.rosterId);
     const name = args.name.trim();
     if (!name) {
       throw new Error("Roster name is required.");
